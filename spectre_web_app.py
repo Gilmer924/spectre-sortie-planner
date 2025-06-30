@@ -7,6 +7,9 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
+import calendar
+from calendar import month_name
+import datetime
 import math
 import re
 from scipy import stats
@@ -300,7 +303,10 @@ if sim_choice == "Weekly Simulation":
                 yaxis_title="Count"
             )
             st.plotly_chart(fig4, use_container_width=True)
-        
+
+        # --- Compute Weekly Hours Flown ---
+        df["hours_flown"] = df["flown"] * ASD
+
         # --- Final Summary Table ---
         st.dataframe(df.describe().transpose())
 
@@ -326,7 +332,7 @@ elif sim_choice == "Personnel Simulation":
             month_goals = {m: st.number_input(f"Goal sorties {m}", value=0, min_value=0, key=f"goal{m}") for m in range(1,13)}
     else:
         st.subheader("O&M Days & Goal — Single Month")
-        month = st.selectbox("Month", list(range(1,13)))
+        month = st.selectbox("month", list(range(1,13)))
         om_days     = {month: st.number_input("O&M days", value=20, min_value=0)}
         month_goals = {month: st.number_input("Sortie goal", value=0, min_value=0)}
 
@@ -497,18 +503,162 @@ elif sim_choice == "Quick Probability Analysis":
         - **CI on p**: Your confidence interval around the success rate _p_, shown numerically.  
         """)
 
-# ---------- ANNUAL HISTORICAL SIMULATION ----------
+# ─── ANNUAL HISTORICAL SIMULATION ───────────────────────────────────
 elif sim_choice == "Annual Historical Simulation":
+    import calendar
     st.header("📅 Annual Historical Simulation")
-    uploaded = st.file_uploader("Upload historical Excel", type=["xlsx","xls"])
-    if uploaded:
-        df = pd.read_excel(uploaded)
-        st.write("Preview data:")
-        st.dataframe(df.head())
-        if st.button("Run Annual Simulation"):
-            results = run_historical_simulation({"historical_df":df}, trials=1)
-            st.write("Simulated:", results)
 
+    # 1) Upload & preview raw data
+    uploaded = st.file_uploader(
+        "Upload 4-yr roll-up (sheet “Historical Data Input”)", 
+        type=["xlsx","xls"]
+    )
+    if not uploaded:
+        st.info("Please upload your Excel file to proceed.")
+        st.stop()
 
+    # 2) Read in the sheet
+    try:
+        df_hist = pd.read_excel(uploaded, sheet_name="Historical Data Input")
+    except Exception as e:
+        st.error(f"Could not read sheet: {e}")
+        st.stop()
 
+        # ── normalize column names ────────────────────────────────────
+    df_hist.columns = (
+        df_hist.columns
+               .str.strip()
+               .str.lower()
+               .str.replace(" ", "_")
+    )
+    # sanity check
+    st.write("🔍 Columns after normalization:", df_hist.columns.tolist())
+    
+    # 3) quick prod-rate debug
+    prod = (
+        df_hist.set_index("month")["sorties_flown"]
+               / df_hist.set_index("month")["hours_flown"]
+    )
+    st.write("📊 Historical prod rates:", prod.to_dict())
+    
+    # ── Normalize month names to numbers ─────────────────────────
+        # ── Normalize month names to numbers ─────────────────────────
+    import calendar
+    name_to_num = {name: idx for idx, name in enumerate(calendar.month_name) if name}
+    df_hist["month_num"] = (
+        df_hist["month"]
+        .astype(str)
+        .str.strip()
+        .str.title()
+        .map(name_to_num)
+    )
+        # quick sanity check
+    st.write("🔍 month_num values:", df_hist["month_num"].unique())
 
+    # 2) Core inputs & targets
+    with st.expander("▶️ Core & Targets", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            TAI         = st.number_input("TAI (Aircraft Inventory)", value=12, step=1)
+            MC_target   = st.slider("MC-Rate Target (%)", 0, 100, 80, 
+                                    help="Your desired minimum MC-rate")
+            FY_goal     = st.number_input("FY Flying-Hour Goal (hrs)", value=0.0, step=100.0)
+            spares_pct  = st.slider("Spares Buffer (%)", 0.0, 100.0, 20.0) / 100.0
+        with col2:
+            st.markdown("**Turn Pattern by month**")
+            patterns = {
+                m: st.text_input(f" Mo{m} pattern", "10x8", key=f"tp{m}")
+                for m in range(1,13)
+            }
+            st.markdown("**Commit Rate by M=month (%)**")
+            commits = {
+                m: st.slider(f" Mo{m} commit", 0, 100, 65, key=f"cr{m}") / 100.0
+                for m in range(1,13)
+            }
+
+    # 3) O&M days & planned degraders
+    with st.expander("▶️ O&M Days & Planned Degraders", expanded=False):
+        om_days   = {}
+        degraders = {}
+        for m in range(1,13):
+            max_d = calendar.monthrange(2025, m)[1]
+            om_days[m]   = st.number_input(f"O&M days Mo{m}", 
+                                           min_value=0, max_value=max_d,
+                                           value=max_d, key=f"om{m}")
+            degraders[m] = st.number_input(f"Degraders Mo{m}", 
+                                           min_value=0, max_value=TAI,
+                                           value=0, key=f"deg{m}")
+
+    # 4) Run the Monte Carlo analysis
+    if st.button("Run Annual Analysis"):
+        params = {
+            "TAI":                TAI,
+            "om_days":            om_days,
+            "planned_degraders":  degraders,
+            "turn_patterns":      patterns,
+            "commit_rates":       commits,
+            "spares_pct":         spares_pct,
+            "historical_df":      df_hist
+        }
+        try:
+            out = run_historical_simulation(params, trials=500)[0]
+        except Exception as e:
+            st.error(f"Annual sim failed: {e}")
+            st.stop()
+
+        # 5) Build output DataFrame
+        df_out = pd.DataFrame(out)
+        df_out["month_name"] = df_out["month"].map({i: calendar.month_abbr[i] for i in df_out["month"]})
+
+        # 6) Monthly Sortie Capacity (mean ± 95% CI)
+        st.subheader("📈 Monthly Sortie Capacity (mean ± 95% CI)")
+        fig = go.Figure([
+            go.Scatter(
+                x=df_out["month_name"],
+                y=df_out["cap_mean"],
+                mode="lines+markers",
+                name="Mean Capacity"
+            ),
+            go.Scatter(
+                x=df_out["month_name"].tolist() + df_out["month_name"][::-1].tolist(),
+                y=df_out["cap_ci_hi"].tolist()  + df_out["cap_ci_lo"][::-1].tolist(),
+                fill="toself", fillcolor="rgba(0,100,200,0.2)",
+                line=dict(width=0), hoverinfo="skip", showlegend=False
+            )
+        ])
+        fig.update_layout(xaxis_title="month", yaxis_title="Sorties")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 7) Over-commitment risk
+        st.subheader("⚠️ Over-commitment Risk by month")
+        risk_fig = go.Figure([go.Bar(
+            x=df_out["month_name"],
+            y=df_out["overcommit_risk"],
+            name="Risk %"
+        )])
+        risk_fig.update_layout(
+            xaxis_title="month",
+            yaxis_title="Risk % (capacity < attempted)",
+            yaxis=dict(ticksuffix="%")
+        )
+        st.plotly_chart(risk_fig, use_container_width=True)
+
+        # 8) Pass/Fail summary
+        avg_mc = df_out["cap_mean"].sum()  # or any MC metric you prefer
+        # (you could compute average MC-rate here if your simulate returns it)
+        cap_hours = df_out["cap_mean"].sum()  # sorties ≈ hours if ASD≈1
+        st.markdown("---")
+        if cap_hours < FY_goal:
+            st.warning(f"❌ Total capacity {cap_hours:.0f} sorties < FY goal {FY_goal:.0f} hrs")
+        else:
+            st.success(f"✅ Total capacity {cap_hours:.0f} sorties ≥ FY goal {FY_goal:.0f} hrs")
+
+        # 9) Detailed table + CSV download
+        st.subheader("📋 Detailed Monthly Results")
+        st.dataframe(df_out.set_index("month_name"))
+        csv_buf = df_out.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "📥 Download CSV", csv_buf,
+            file_name="annual_capacity_results.csv",
+            mime="text/csv"
+        )
