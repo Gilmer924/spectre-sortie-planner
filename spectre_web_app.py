@@ -506,159 +506,278 @@ elif sim_choice == "Quick Probability Analysis":
 # ─── ANNUAL HISTORICAL SIMULATION ───────────────────────────────────
 elif sim_choice == "Annual Historical Simulation":
     import calendar
+    import pandas as pd
+    import numpy as np
+    from simulations.utils import calculate_monthly_rates
+    from simulations.historical_annual import HistoricalAnnualSimulation
+
     st.header("📅 Annual Historical Simulation")
 
-    # 1) Upload & preview raw data
-    uploaded = st.file_uploader(
-        "Upload 4-yr roll-up (sheet “Historical Data Input”)", 
-        type=["xlsx","xls"]
-    )
+    # --- 1) Upload historical data ---
+    uploaded = st.file_uploader("Upload 4-yr roll-up (sheet 'Historical Data Input')", type=["xlsx","xls"])
     if not uploaded:
-        st.info("Please upload your Excel file to proceed.")
-        st.stop()
-
-    # 2) Read in the sheet
-    try:
-        df_hist = pd.read_excel(uploaded, sheet_name="Historical Data Input")
-    except Exception as e:
-        st.error(f"Could not read sheet: {e}")
-        st.stop()
-
-        # ── normalize column names ────────────────────────────────────
+        st.info("Please upload your Excel file to proceed."); st.stop()
+    df_hist = pd.read_excel(uploaded, sheet_name="Historical Data Input")
     df_hist.columns = (
-        df_hist.columns
-               .str.strip()
-               .str.lower()
-               .str.replace(" ", "_")
+        df_hist.columns.str.strip().str.lower().str.replace(" ", "_")
     )
-    # sanity check
-    st.write("🔍 Columns after normalization:", df_hist.columns.tolist())
-    
-    # 3) quick prod-rate debug
-    prod = (
-        df_hist.set_index("month")["sorties_flown"]
-               / df_hist.set_index("month")["hours_flown"]
-    )
-    st.write("📊 Historical prod rates:", prod.to_dict())
-    
-    # ── Normalize month names to numbers ─────────────────────────
-        # ── Normalize month names to numbers ─────────────────────────
-    import calendar
     name_to_num = {name: idx for idx, name in enumerate(calendar.month_name) if name}
     df_hist["month_num"] = (
-        df_hist["month"]
-        .astype(str)
-        .str.strip()
-        .str.title()
-        .map(name_to_num)
+        df_hist["month"].astype(str).str.strip().str.title().map(name_to_num)
     )
-        # quick sanity check
-    st.write("🔍 month_num values:", df_hist["month_num"].unique())
 
-    # 2) Core inputs & targets
-    with st.expander("▶️ Core & Targets", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            TAI         = st.number_input("TAI (Aircraft Inventory)", value=12, step=1)
-            MC_target   = st.slider("MC-Rate Target (%)", 0, 100, 80, 
-                                    help="Your desired minimum MC-rate")
-            FY_goal     = st.number_input("FY Flying-Hour Goal (hrs)", value=0.0, step=100.0)
-            spares_pct  = st.slider("Spares Buffer (%)", 0.0, 100.0, 20.0) / 100.0
-        with col2:
-            st.markdown("**Turn Pattern by month**")
-            patterns = {
-                m: st.text_input(f" Mo{m} pattern", "10x8", key=f"tp{m}")
-                for m in range(1,13)
-            }
-            st.markdown("**Commit Rate by M=month (%)**")
-            commits = {
-                m: st.slider(f" Mo{m} commit", 0, 100, 65, key=f"cr{m}") / 100.0
-                for m in range(1,13)
-            }
-
-    # 3) O&M days & planned degraders
-    with st.expander("▶️ O&M Days & Planned Degraders", expanded=False):
-        om_days   = {}
-        degraders = {}
-        for m in range(1,13):
-            max_d = calendar.monthrange(2025, m)[1]
-            om_days[m]   = st.number_input(f"O&M days Mo{m}", 
-                                           min_value=0, max_value=max_d,
-                                           value=max_d, key=f"om{m}")
-            degraders[m] = st.number_input(f"Degraders Mo{m}", 
-                                           min_value=0, max_value=TAI,
-                                           value=0, key=f"deg{m}")
-
-    # 4) Run the Monte Carlo analysis
-    if st.button("Run Annual Analysis"):
-        params = {
-            "TAI":                TAI,
-            "om_days":            om_days,
-            "planned_degraders":  degraders,
-            "turn_patterns":      patterns,
-            "commit_rates":       commits,
-            "spares_pct":         spares_pct,
-            "historical_df":      df_hist
-        }
-        try:
-            out = run_historical_simulation(params, trials=500)[0]
-        except Exception as e:
-            st.error(f"Annual sim failed: {e}")
-            st.stop()
-
-        # 5) Build output DataFrame
-        df_out = pd.DataFrame(out)
-        df_out["month_name"] = df_out["month"].map({i: calendar.month_abbr[i] for i in df_out["month"]})
-
-        # 6) Monthly Sortie Capacity (mean ± 95% CI)
-        st.subheader("📈 Monthly Sortie Capacity (mean ± 95% CI)")
-        fig = go.Figure([
-            go.Scatter(
-                x=df_out["month_name"],
-                y=df_out["cap_mean"],
-                mode="lines+markers",
-                name="Mean Capacity"
-            ),
-            go.Scatter(
-                x=df_out["month_name"].tolist() + df_out["month_name"][::-1].tolist(),
-                y=df_out["cap_ci_hi"].tolist()  + df_out["cap_ci_lo"][::-1].tolist(),
-                fill="toself", fillcolor="rgba(0,100,200,0.2)",
-                line=dict(width=0), hoverinfo="skip", showlegend=False
-            )
-        ])
-        fig.update_layout(xaxis_title="month", yaxis_title="Sorties")
-        st.plotly_chart(fig, use_container_width=True)
-
-        # 7) Over-commitment risk
-        st.subheader("⚠️ Over-commitment Risk by month")
-        risk_fig = go.Figure([go.Bar(
-            x=df_out["month_name"],
-            y=df_out["overcommit_risk"],
-            name="Risk %"
-        )])
-        risk_fig.update_layout(
-            xaxis_title="month",
-            yaxis_title="Risk % (capacity < attempted)",
-            yaxis=dict(ticksuffix="%")
+# --- 2) Display & Edit Calculated Monthly Rates from Import ---
+    rates_df = calculate_monthly_rates(df_hist)
+    
+    with st.expander("📊 Historical Monthly Rates (edit as needed)", expanded=True):
+        st.caption("⬆️ You may edit the rates below for each month before running the simulation. These edited values will be used for all downstream calculations. The original imported/calculated rates are shown for reference below.")
+        # Always-editable grid (Option 1)
+        editable_rates = rates_df.copy()
+        edited = st.data_editor(
+            editable_rates,
+            hide_index=True,
+            use_container_width=True,
+            num_rows="fixed",  # disables adding/removing months
+            key="edit_grid_all_rates"
         )
-        st.plotly_chart(risk_fig, use_container_width=True)
+        # Show a reminder/info
+        st.info("You may change any monthly rate in the table above. These edits will override the imported historical values for the simulation.")
+    
+    with st.expander("See Original Calculated Rates", expanded=False):
+        st.dataframe(rates_df, use_container_width=True)
+    
+    # Use 'edited' as rates_df for all downstream calculations
+    rates_df = edited
 
-        # 8) Pass/Fail summary
-        avg_mc = df_out["cap_mean"].sum()  # or any MC metric you prefer
-        # (you could compute average MC-rate here if your simulate returns it)
-        cap_hours = df_out["cap_mean"].sum()  # sorties ≈ hours if ASD≈1
-        st.markdown("---")
-        if cap_hours < FY_goal:
-            st.warning(f"❌ Total capacity {cap_hours:.0f} sorties < FY goal {FY_goal:.0f} hrs")
+    # --- 3) Editable Planning Matrix ---
+    st.subheader("📝 FY Planning Inputs (Oct–Sep)")
+    months = list(range(10, 13)) + list(range(1, 10))  # Oct–Sep
+    month_names = [calendar.month_abbr[m] for m in months]
+    default_matrix = pd.DataFrame({
+        "Month": month_names,
+        "O&M Days": [20]*12,
+        "Degraders": [0]*12,
+        "Turn Pattern": ["8x6"]*12,
+        "Commit %": [65]*12,
+        "ASD": [2.0]*12
+    })
+
+    with st.expander("📝 FY Planning Inputs (Oct–Sep)", expanded=True):
+        plan_df = st.data_editor(
+            default_matrix,
+            num_rows="fixed",
+            use_container_width=True,
+            hide_index=True,
+            key="annual_planning_grid"
+        )
+
+    # --- 4) Top-level planning goals ---
+    with st.expander("📝 FY Planning Inputs (Oct–Sep)", expanded=True):
+        TAI         = st.number_input("TAI (Aircraft Inventory)", value=12, step=1)
+        FY_goal     = st.number_input("FY Flying-Hour Goal (hrs)", value=0.0, step=100.0)
+        ASD         = st.number_input("Avg Sortie Duration (hrs)", value=2.0, step=0.1)
+        MC_target   = st.slider("MC-Rate Target (%)", 0, 100, 80, help="Desired minimum MC-rate")
+        mc_delta    = st.slider("Adjust MC Rate (%)", -10, 10, 0, step=1, help="Test impact of improved/degraded MC-rate")
+
+        # --- Uncertainty slider for Monte Carlo noise ---
+        uncertainty = st.slider(
+            "Monthly uncertainty (±%)",
+            min_value=0, max_value=20, value=5, step=1,
+            help="Amount of random variation in MC and Execution rates per month"
+        ) / 100.0
+
+    # --- 5) Extract planning inputs as dicts keyed by month_num ---
+    om_days = {m: int(plan_df.loc[i, "O&M Days"]) for i, m in enumerate(months)}
+    degraders = {m: int(plan_df.loc[i, "Degraders"]) for i, m in enumerate(months)}
+    turn_patterns = {m: plan_df.loc[i, "Turn Pattern"] for i, m in enumerate(months)}
+    commit_rates = {m: float(plan_df.loc[i, "Commit %"])/100.0 for i, m in enumerate(months)}
+    asd_dict = {m: float(plan_df.loc[i, "ASD"]) for i, m in enumerate(months)}  # Not used yet, for future
+
+    # --- 6) Run Simulation Button ---
+    if st.button("Run Annual Analysis"):
+        # Apply MC-delta (if any) to rates
+        rates_df_adj = rates_df.copy()
+        if mc_delta != 0:
+            rates_df_adj["mc_rate"] = (rates_df["mc_rate"] * (1 + mc_delta/100)).clip(upper=1.0)
+
+        sim_params = {
+            "rates_df": rates_df_adj,
+            "TAI": TAI,
+            "om_days": om_days,
+            "planned_degraders": degraders,
+            "turn_patterns": turn_patterns,
+            "commit_rates": commit_rates,
+            "uncertainty": uncertainty
+        }
+        sim = HistoricalAnnualSimulation()
+        sim.params = sim_params
+
+        # --- Run the Monte Carlo sim just once ---
+        all_trials, summary = sim.simulate(trials=500)
+
+        # Handle if summary is a list of lists
+        if isinstance(summary, list) and len(summary) > 0 and isinstance(summary[0], list):
+            main_results = summary[0]
         else:
-            st.success(f"✅ Total capacity {cap_hours:.0f} sorties ≥ FY goal {FY_goal:.0f} hrs")
+            main_results = summary
 
-        # 9) Detailed table + CSV download
-        st.subheader("📋 Detailed Monthly Results")
-        st.dataframe(df_out.set_index("month_name"))
-        csv_buf = df_out.to_csv(index=False).encode("utf-8")
+        # Now main_results should be a list of dicts, safe for DataFrame
+        results_df = pd.DataFrame(main_results)
+
+        # PATCH: Ensure "month" column is present and correct
+        months = list(range(10, 13)) + list(range(1, 10))
+        if "month" not in results_df.columns:
+            results_df["month"] = months[:len(results_df)]
+
+        # Assign month_name for charts/tables
+        results_df["month_name"] = [calendar.month_abbr[m] for m in results_df["month"]]
+
+        # Optional: Print for debug
+        # print("DEBUG: results_df columns:", results_df.columns.tolist())
+        # print("DEBUG: results_df head:\n", results_df.head())
+
+        # --- 7) Show Alerts for Over-commitment ---
+        with st.expander("⚠️ Alerts & Warnings", expanded=False):
+            for idx, m in enumerate(months):
+                r = rates_df_adj[rates_df_adj["month_num"]==m].iloc[0]
+                flyable_ac = max(0, math.floor(TAI - degraders[m]) * r["mc_rate"])
+                first_go = int(turn_patterns[m].split("x")[0])
+                if flyable_ac > 0:
+                    commit_pct = first_go / flyable_ac * 100
+                    if commit_pct > 80:
+                        st.warning(f"{calendar.month_abbr[m]}: Over-committed! "
+                                   f"{first_go} committed / {flyable_ac:.1f} flyable ({commit_pct:.1f}%)")
+                    else:
+                        st.info(f"{calendar.month_abbr[m]}: Commit rate {commit_pct:.1f}% (OK)")
+                else:
+                    st.error(f"{calendar.month_abbr[m]}: No flyable AC available!")
+
+        # --- 7b) Probability of Meeting Flying Hour Goal ---
+        st.subheader("🎯 Probability of Meeting Flying Hour Goal")
+        # Calculate hours flown for each trial (as sum over months)
+        all_hours_flown = []
+        for trial in all_trials:
+            trial_hours = 0.0
+            for m_result in trial:
+                # Use month-specific ASD
+                asd = asd_dict[m_result["month"]]
+                # Use mean/actual "flown" key as present in your trial dict
+                flown_val = (
+                    m_result["flown"] if "flown" in m_result else m_result.get("flown_mean", 0)
+                )
+                trial_hours += flown_val * asd
+            all_hours_flown.append(trial_hours)
+        n_success = sum(h >= FY_goal for h in all_hours_flown)
+        prob_success = n_success / len(all_hours_flown) if len(all_hours_flown) else 0.0
+        st.info(
+            f"Estimated **probability of meeting your goal**: "
+            f"**{prob_success:.1%}** ({n_success}/{len(all_hours_flown)} trials)"
+        )
+
+        import plotly.graph_objects as go
+        fig_prob = go.Figure()
+        fig_prob.add_trace(go.Histogram(x=all_hours_flown, nbinsx=30))
+        fig_prob.add_vline(x=FY_goal, line_color="red", line_dash="dash", annotation_text="Goal")
+        fig_prob.update_layout(
+            xaxis_title="Simulated FY Hours Flown",
+            yaxis_title="Frequency",
+            title="Distribution of Simulated Total Flying Hours"
+        )
+        st.plotly_chart(fig_prob, use_container_width=True)
+        st.write(
+            f"**Mean simulated hours flown:** {np.mean(all_hours_flown):,.1f}  \n"
+            f"**Std. deviation:** {np.std(all_hours_flown):,.1f}"
+        )
+
+        # --- 8) Visuals for Scheduled/Flown Sorties and Hours ---
+        st.subheader("📈 Sorties Scheduled vs Flown")
+        sched_col = "scheduled_mean" if "scheduled_mean" in results_df.columns else "scheduled"
+        flown_col = "flown_mean" if "flown_mean" in results_df.columns else "flown"
+
+        fig1 = go.Figure()
+        fig1.add_trace(go.Bar(x=results_df["month_name"], y=results_df[sched_col], name="Scheduled"))
+        fig1.add_trace(go.Bar(x=results_df["month_name"], y=results_df[flown_col], name="Flown"))
+        fig1.update_layout(barmode="group", yaxis_title="Sorties")
+        st.plotly_chart(fig1, use_container_width=True)
+
+        st.subheader("📈 Hours Scheduled vs Flown")
+        hours_sched = results_df[sched_col] * [asd_dict[m] for m in results_df["month"]]
+        hours_flown = results_df[flown_col] * [asd_dict[m] for m in results_df["month"]]
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(x=results_df["month_name"], y=hours_sched, name="Hours Scheduled"))
+        fig2.add_trace(go.Bar(x=results_df["month_name"], y=hours_flown, name="Hours Flown"))
+        fig2.update_layout(barmode="group", yaxis_title="Hours")
+        st.plotly_chart(fig2, use_container_width=True)
+
+        # Calculate hours_flown for each month
+        results_df["hours_flown"] = results_df["flown_mean"] * results_df["asd_mean"]
+
+        # --- 9) Downloadable Table ---
+        st.subheader("📋 Detailed Results Table")
+        
+        # Specify your desired column order
+        csv_columns = [
+            "month", "month_name",
+            "scheduled_mean",
+            # "scheduled_ci_lo",
+            # "scheduled_ci_hi",
+            "flown_mean",
+            "hours_flown",
+            "asd_mean",
+            "flown_ci_lo",
+            "flown_ci_hi",
+            "mc_rate_mean",
+            "execution_rate_mean",
+            "avg_flyable",
+            "overcommit_risk",
+            "break_rate_mean",
+            "gab_rate_mean",
+            "spared_gab_rate_mean"
+        ]
+
+        # Ensure the DataFrame has all these columns (add empty if needed for robustness)
+        for col in csv_columns:
+            if col not in results_df.columns:
+                results_df[col] = ""
+
+        # Reorder columns
+        results_df_totals = results_df[csv_columns].copy()
+
+        # Build the totals row
+        total_row = {
+            "month": np.nan,
+            "month_name": "Total",
+            "scheduled_mean": results_df["scheduled_mean"].sum(),
+            # "scheduled_ci_lo": "",
+            # "scheduled_ci_hi": "",
+            "flown_mean": results_df["flown_mean"].sum(),
+            "hours_flown": results_df["hours_flown"].sum(),
+            "asd_mean": np.nan,
+            "flown_ci_lo": np.nan,
+            "flown_ci_hi": np.nan,
+            "mc_rate_mean": np.nan,
+            "execution_rate_mean": np.nan,
+            "avg_flyable": np.nan,
+            "overcommit_risk": np.nan,
+            "break_rate_mean": np.nan,
+            "gab_rate_mean": np.nan,
+            "spared_gab_rate_mean": np.nan
+        }
+
+        # Append the total row
+        results_df_totals = pd.concat([
+            results_df_totals,
+            pd.DataFrame([total_row])
+        ], ignore_index=True)
+
+        # Show table in app
+        st.dataframe(results_df_totals, use_container_width=True)
+
+        # Download as CSV
+        csv_buf = results_df_totals.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "📥 Download CSV", csv_buf,
-            file_name="annual_capacity_results.csv",
+            "📥 Download Detailed Results CSV",
+            csv_buf,
+            file_name="annual_sim_results.csv",
             mime="text/csv"
         )

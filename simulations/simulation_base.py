@@ -7,6 +7,7 @@ Created on Tue Jun 24 08:59:29 2025
 # simulations/simulation_base.py
 from abc import ABC, abstractmethod
 
+
 class SimulationBase(ABC):
     def __init__(self, **params):
         self.params = params
@@ -22,4 +23,3 @@ class SimulationBase(ABC):
 
     def get_results(self):
         return self.results
-
