@@ -3,7 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Virtual environment
+# Virtual environment folders
 env/
 venv/
 .venv/
@@ -14,3 +14,34 @@ venv/
 # IDE configs
 .vscode/
 .idea/
+.spyproject/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Streamlit secrets/config
+.streamlit/secrets.toml
+
+# Data and output files (optional, if you don’t want to track these)
+*.csv
+*.xlsx
+*.xls
+*.h5
+*.db
+*.sqlite3
+
+# Logs and coverage
+*.log
+.coverage
+htmlcov/
+*.cover
+coverage.xml
+.cache/
+pytest_cache/
+
+# Backups and swap files
+*~
+*.bak
+*.swp
+*.tmp
