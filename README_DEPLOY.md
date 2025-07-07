@@ -18,5 +18,8 @@ This document provides basic steps for deploying the SPECTRE Sortie Planner web 
 1. **Clone or download** the SPECTRE repository to your local machine or server:
 
    ```sh
-   git clone https://your-repository-url.git
+   git clone https://github.com/Gilmer924/spectre-sortie-planner.git
    cd SPECTRE_Sortie_Planner_Web
+
+## 3. Quick Start
+docker build -t spectre-sortie-planner . && docker run -p 8501:8501 spectre-sortie-planner
