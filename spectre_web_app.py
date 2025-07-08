@@ -312,7 +312,8 @@ if sim_choice == "Weekly Simulation":
 
 # ---------- PERSONNEL SIMULATION ----------
 elif sim_choice == "Personnel Simulation":
-    import calendar, pandas as pd
+    import calendar, pandas as pd, numpy as np
+    from collections import Counter
     st.header("👥 Personnel Capacity Simulation")
 
     # — Sidebar Basic Params —
@@ -323,18 +324,37 @@ elif sim_choice == "Personnel Simulation":
 
     # — Timeframe + Goals —
     mode = st.radio("Timeframe", ["Full FY", "Single Month"])
+    
     if mode == "Full FY":
-        st.subheader("O&M Days & Goals — Full FY")
-        cols = st.columns(2)
-        with cols[0]:
-            om_days = {m: st.number_input(f"O&M days {m}", value=20, min_value=0, key=f"om{m}") for m in range(1,13)}
-        with cols[1]:
-            month_goals = {m: st.number_input(f"Goal sorties {m}", value=0, min_value=0, key=f"goal{m}") for m in range(1,13)}
+        months = list(range(1, 13))
+        month_names = [calendar.month_abbr[m] for m in months]
+        default_om = [20] * 12
+        default_goals = [0] * 12
+    
+        planning_df = pd.DataFrame({
+            "Month": month_names,
+            "O&M Days": default_om,
+            "Goal Sorties": default_goals
+        })
+        with st.expander("🗓️ O&M Days & Goals Planning Matrix", expanded=True):
+            st.caption("Edit O&M Days or monthly sortie goals as needed. One row per month.")
+            edited_plan = st.data_editor(
+                planning_df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                key="personnel_om_matrix"
+            )
+        om_days = {i+1: int(edited_plan.loc[i, "O&M Days"]) for i in range(12)}
+        month_goals = {i+1: int(edited_plan.loc[i, "Goal Sorties"]) for i in range(12)}
+        months = list(range(1, 13))
+    
     else:
         st.subheader("O&M Days & Goal — Single Month")
-        month = st.selectbox("month", list(range(1,13)))
+        month = st.selectbox("Month", list(range(1,13)))
         om_days     = {month: st.number_input("O&M days", value=20, min_value=0)}
         month_goals = {month: st.number_input("Sortie goal", value=0, min_value=0)}
+        months = [month]
 
     # — Absence & UTE Rates —
     st.subheader("Absence & Skill Factors")
@@ -381,7 +401,7 @@ elif sim_choice == "Personnel Simulation":
     if st.button("Run Personnel Simulation"):
         params = {
             "TAI":                    TAI,
-            "months":                 list(om_days.keys()),
+            "months":                 months,
             "om_days":                om_days,
             "month_goals":            month_goals,
             "leave_rate":             leave,
@@ -393,56 +413,103 @@ elif sim_choice == "Personnel Simulation":
         }
         per_results = run_personnel_simulation(params, trials=TrialsP)
 
-        # turn the **first** trial into a DataFrame
+        # 1) Main summary DataFrame (first trial)
         df_per = pd.DataFrame(per_results[0]).set_index("month")
-        st.success("✅ Simulation complete!")
-        st.write("### Monthly Summary")
-        st.dataframe(df_per)
 
-        # — Chart: Supported vs Goal —
-        months    = df_per.index.tolist()
+        skill_levels = ["3", "5", "7"]
+        for lvl in skill_levels:
+            ratio_col = f"ppl_per_ac_{lvl}"
+            df_per[ratio_col] = [
+                sum(wc.get(lvl, 0) for wc in workcenters.values()) / TAI
+                for _ in df_per.index
+            ]
+        show_cols = [
+            "present_people", "available_hours", "sorties_supported",
+            "ppl_per_ac", "shifts_supported", "shortfall",
+            "limiting_shop", "limiting_shop_sorties",
+            "ppl_per_ac_3", "ppl_per_ac_5", "ppl_per_ac_7"
+        ]
+        st.success("✅ Simulation complete!")
+        st.write("### Monthly Summary (including bottlenecks & shortfalls)")
+        st.dataframe(df_per[show_cols])
+
+        # 2) Alert for each bottleneck/shortfall (per month)
+        st.subheader("⚠️ Bottleneck Alerts")
+        for m, row in df_per.iterrows():
+            if row.get("shortfall", False):
+                st.warning(
+                    f"{calendar.month_abbr[m]} shortfall: "
+                    f"Bottleneck = {row['limiting_shop'] or 'N/A'} "
+                    f"(can only support {row['limiting_shop_sorties']:.1f} sorties)"
+                )
+
+        # 3) Frequency of bottleneck shop across all trials (first month as example)
+        if TrialsP > 1:
+            st.subheader("🔍 Bottleneck Frequency (Monte Carlo)")
+            all_bottlenecks = Counter(
+                trial[0].get("limiting_shop", "") for trial in per_results if trial[0].get("shortfall", False)
+            )
+            if all_bottlenecks:
+                most_common = all_bottlenecks.most_common(1)[0]
+                st.info(
+                    f"Most common bottleneck for {calendar.month_abbr[months[0]]}: "
+                    f"{most_common[0]} ({most_common[1]} out of {TrialsP} trials)"
+                )
+
+        # 4) Supported vs Goal plot
+        months_list = df_per.index.tolist()
         supported = df_per["sorties_supported"].tolist()
-        goals     = [month_goals.get(m,0) for m in months]
+        goals = [month_goals.get(m,0) for m in months_list]
+        import plotly.graph_objects as go
         fig1 = go.Figure()
-        fig1.add_trace(go.Scatter(x=months, y=supported, mode="lines+markers", name="Supported"))
-        fig1.add_trace(go.Scatter(x=months, y=goals,     mode="lines+markers", name="Goal"))
+        fig1.add_trace(go.Scatter(x=months_list, y=supported, mode="lines+markers", name="Supported"))
+        fig1.add_trace(go.Scatter(x=months_list, y=goals, mode="lines+markers", name="Goal"))
+        # 5) Annotate shortfall months
+        shortfall_months = [m for m, row in df_per.iterrows() if row["shortfall"]]
+        fig1.add_trace(go.Scatter(
+            x=shortfall_months,
+            y=[df_per.loc[m, "sorties_supported"] for m in shortfall_months],
+            mode="markers",
+            marker=dict(color="red", size=10),
+            name="Shortfall"
+        ))
         fig1.update_layout(
-            title="Monthly Sorties Supported vs Goal",
+            title="Monthly Sorties Supported vs Goal (Shortfalls in Red)",
             xaxis_title="Month",
             yaxis_title="Sorties",
-            xaxis=dict(tickmode="array", tickvals=months)
+            xaxis=dict(tickmode="array", tickvals=months_list)
         )
         st.plotly_chart(fig1, use_container_width=True)
 
-        # — Optionally: distribution histogram if MC >1 —
+        # 6) Histogram for MC >1
         if TrialsP > 1:
             all_months = list(zip(*[
-                [trial[m]["sorties_supported"] for m in range(len(months))]
+                [trial[m]["sorties_supported"] for m in range(len(months_list))]
                 for trial in per_results
             ]))
+            st.subheader("📊 Monte Carlo Distribution (First Month)")
             fig2 = go.Figure()
-            fig2.add_trace(go.Histogram(x=all_months[0], nbinsx=20, name=f"Month {months[0]}"))
+            fig2.add_trace(go.Histogram(x=all_months[0], nbinsx=20, name=f"Month {months_list[0]}"))
             fig2.update_layout(
-                title=f"Histogram: Sorties Supported (Month {months[0]})",
+                title=f"Histogram: Sorties Supported (Month {months_list[0]})",
                 xaxis_title="Sorties Supported",
                 yaxis_title="Frequency"
             )
             st.plotly_chart(fig2, use_container_width=True)
 
-        # — Heatmap: % Manned by Shop × Month —
+        # 7) Heatmap: % Manned by Shop × Month
         shops  = list(workcenters.keys())
         matrix = []
         for shop in shops:
             row = []
             auth = sum(wc["auth"].get(lvl,0) for wc in wc_list if wc["shop"]==shop for lvl in ("3","5","7"))
-            for idx,m in enumerate(months):
-                pres = per_results[0][idx]["present_people"]
+            for idx,m in enumerate(months_list):
+                pres = df_per.loc[m, "present_people"]
                 row.append((pres/auth*100) if auth>0 else 0)
             matrix.append(row)
-
         fig3 = go.Figure(data=go.Heatmap(
             z=matrix,
-            x=[calendar.month_abbr[m] for m in months],
+            x=[calendar.month_abbr[m] for m in months_list],
             y=shops,
             colorscale="RdYlGn",
             zmin=0, zmax=100
@@ -450,6 +517,15 @@ elif sim_choice == "Personnel Simulation":
         fig3.update_layout(title="% Manned by Shop × Month")
         st.plotly_chart(fig3, use_container_width=True)
 
+        # 8) Downloadable Results Table (all columns)
+        st.subheader("📥 Download Results")
+        csv_buf = df_per[show_cols].reset_index().to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "📥 Download Personnel Sim Results CSV",
+            csv_buf,
+            file_name="personnel_sim_results.csv",
+            mime="text/csv"
+        )
 
 # ---------- QUICK PROBABILITY ANALYSIS ----------
 elif sim_choice == "Quick Probability Analysis":
