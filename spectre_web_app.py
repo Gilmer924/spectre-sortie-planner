@@ -32,6 +32,11 @@ try:
 except FileNotFoundError:
     st.warning("Logo not found. Add 'spectre_logo.png' to app folder.")
 
+
+#------ RIM Toggle --------
+st.sidebar.markdown("### Experimental Modules")
+enable_rim_ns = st.sidebar.checkbox("Enable RIM / North Star (beta)", value=False)
+
 # ---------- Simulation Selector ----------
 sim_options = [
     "Weekly Simulation",
@@ -47,6 +52,46 @@ if sim_choice == "Weekly Simulation":
     # --- Sidebar Inputs ---
     TAI       = st.sidebar.number_input("Total AC Inventory", value=12)
     Overhead  = st.sidebar.number_input("Overhead AC", value=2)
+
+    # ── RIM / NS structure (does NOT change sim_engine yet) ───────────────
+    if enable_rim_ns:
+        st.sidebar.markdown("**RIM Structure (Experimental)**")
+
+        PAI = st.sidebar.number_input(
+            "PAI (Primary Aircraft Inventory)",
+            value=TAI,
+            step=1,
+            help="Primary aircraft normally used for training/ops."
+        )
+        BAI = max(TAI - PAI, 0)
+        st.sidebar.caption(f"BAI (Backup Aircraft Inventory) assumed: {BAI} = TAI − PAI")
+
+        st.sidebar.markdown("**Degrader Bins (Overhead)**")
+        rim_nmcm = st.sidebar.number_input("NMCM (NMC Maintenance)", value=0, step=1)
+        rim_nmcs = st.sidebar.number_input("NMCS (NMC Supply)", value=0, step=1)
+        rim_nmcb = st.sidebar.number_input("NMCB (Both)", value=0, step=1)
+        rim_nmc_fly = st.sidebar.number_input(
+            "NMC Flyable tails",
+            value=0,
+            step=1,
+            help="Flyable but still coded NMC (headroom for scheduling, not EP)."
+        )
+        rim_depot = st.sidebar.number_input("Depot / Programmed (PDM, etc.)", value=0, step=1)
+        rim_upnr  = st.sidebar.number_input("UPNR", value=0, step=1)
+
+        # Store this richer structure for RIM/NS math & future visualizations
+        st.session_state["rim_structure_weekly"] = {
+            "TAI": int(TAI),
+            "PAI": int(PAI),
+            "BAI": int(BAI),
+            "NMCM": int(rim_nmcm),
+            "NMCS": int(rim_nmcs),
+            "NMCB": int(rim_nmcb),
+            "NMC_flyable": int(rim_nmc_fly),
+            "Depot": int(rim_depot),
+            "UPNR": int(rim_upnr),
+        }
+
     ASD       = st.sidebar.number_input("Avg Sortie Duration (hrs)", value=1.9)
     Break_pct = st.sidebar.slider("Break Rate (%)", 0.0, 100.0, 16.6)
     GA_pct    = st.sidebar.slider("Ground Abort Rate (%)", 0.0, 100.0, 7.5)
@@ -165,9 +210,17 @@ if sim_choice == "Weekly Simulation":
                         f"(threshold={commit_thresh:.0f}%)"
                     )
 
-        # ── RISK METRICS & SUGGESTIONS ────────────────────────
-        mnd_risk   = sum(1 for r in week_results if r["mnd"]>0)/len(week_results)*100
-        abort_risk = sum(1 for r in week_results if r["ground_aborts"]>0)/len(week_results)*100
+        # ── RISK METRICS & SUGGESTIONS (per-sortie loss rate) ───────────
+        total_flown = sum(r["flown"] for r in week_results)
+        total_mnd   = sum(r["mnd"] for r in week_results)
+        total_ga    = sum(r["ground_aborts"] for r in week_results)
+
+        if total_flown > 0:
+            mnd_risk   = (total_mnd / total_flown) * 100.0
+            abort_risk = (total_ga / total_flown) * 100.0
+        else:
+            mnd_risk = abort_risk = 0.0
+
         risk_msg = f"MND-Risk: {mnd_risk:.1f}% | Abort-Risk: {abort_risk:.1f}%"
 
         if mnd_risk > 10 or abort_risk > 10:
@@ -177,12 +230,6 @@ if sim_choice == "Weekly Simulation":
         else:
             st.success(risk_msg + " → Low risk 👍")
 
-        if mnd_risk > 5 and not weekend_flags[sel_w-1]:
-            st.info("💡 Suggestion: enable Weekend Duty for repairs.")
-        if any(s > 0.9 * a for s, a in zip(avg_sched, avg_avail)):
-            st.info("💡 Suggestion: reduce daily pattern to build buffer.")
-        if df["fix_completed"].mean() < df["breaks"].mean():
-            st.info("💡 Suggestion: increase short-turn fix rates.")
 
         # ── Turn-Factor Calculation ────────────────────────────────────
         # Grab the raw pattern strings for the selected week
@@ -213,6 +260,111 @@ if sim_choice == "Weekly Simulation":
             f"({avg_first} + {avg_second}) / {avg_first} = {turn_factor:.2f}  \n"
             f"→ Rounded averages: First Go={avg_first}, Second Go={avg_second}"
         )
+        # --- RIM / North Star (Experimental) — Crew-Based Requirement ---
+        if enable_rim_ns:
+            from simulations.rim_requirements import compute_crew_aircraft_requirement
+        
+            st.subheader("RIM / North Star (Experimental) — Crew Requirement")
+        
+            st.caption(
+                "This calculation is read-only and does not change the weekly sim. "
+                "It shows how many aircraft are required from a crew perspective, "
+                "given your current Turn Factor and a monthly crew requirement."
+            )
+        
+            # Inputs specific to RIM requirement
+            rim_col1, rim_col2, rim_col3 = st.columns(3)
+            with rim_col1:
+                crew_ratio = st.number_input(
+                    "Crew Ratio (crews per aircraft)",
+                    min_value=0.0,
+                    value=1.2,
+                    step=0.1,
+                    key="rim_crew_ratio",
+                    help="Example: 1.2 means 1.2 crews per PAI."
+                )
+            with rim_col2:
+                spcm = st.number_input(
+                    "Sorties per Crew per Month (SPCM)",
+                    min_value=0.0,
+                    value=4.0,
+                    step=0.5,
+                    key="rim_spcm",
+                    help="How many sorties each crew must fly per month."
+                )
+            with rim_col3:
+                om_days_rim = st.number_input(
+                    "O&M Days in Planning Month (for RIM)",
+                    min_value=1,
+                    value=20,
+                    step=1,
+                    key="rim_om_days",
+                    help="Use your monthly fly days here (not just this week)."
+                )
+        
+            # Use your 'Sortie Attrition (%)' as the attrition input for now
+            attrition_rate_rim = SortieAttr / 100.0
+        
+            rim_req = compute_crew_aircraft_requirement(
+                pai=int(TAI),  # later we can refine PAI vs BAI/Overhead
+                crew_ratio=float(crew_ratio),
+                sorties_per_crew_month=float(spcm),
+                om_days=int(om_days_rim),
+                turn_factor=float(turn_factor),
+                attrition_rate=float(attrition_rate_rim),
+            )
+        
+            st.markdown(
+                f"**Crew-based aircraft required:** **{rim_req['aircraft_required']}**  \n"
+                f"- Net sorties per month (crews): {rim_req['net_sorties_month']:.1f}  \n"
+                f"- Daily gross lines (after attrition): {rim_req['daily_gross_lines']:.1f}  \n"
+                f"- Turn Factor used: {rim_req['turn_factor']:.2f} sorties/jet/day  \n"
+                f"- Attrition used: {rim_req['attrition_rate']:.0%}"
+            )
+            
+            # --- Compare crew-based requirement to simulated availability ---
+            st.subheader("RIM vs Simulated Weekly Capacity")
+            
+            try:
+                # avg_start / avg_end are already computed above for the selected week
+                avg_start_cap = float(np.mean(avg_start))   # start-of-day capacity
+                avg_end_cap   = float(np.mean(avg_end))     # end-of-day capacity
+            
+                rim_ac = rim_req["aircraft_required"]
+                delta_start = avg_start_cap - rim_ac
+                delta_end   = avg_end_cap - rim_ac
+            
+                st.markdown(
+                    f"""
+                    **Average Start-of-Day Capacity:** {avg_start_cap:.1f} aircraft  
+                    **Average End-of-Day Capacity:** {avg_end_cap:.1f} aircraft  
+                    **Crew-Based Requirement (RIM):** {rim_ac} aircraft  
+            
+                    • Start-of-day margin: **{delta_start:+.1f}** aircraft  
+                    • End-of-day margin: **{delta_end:+.1f}** aircraft  
+                    """
+                )
+
+                # --- Store a simple summary for future dashboards/modules ---
+                st.session_state["weekly_rim_summary"] = {
+                    "turn_factor": float(turn_factor),
+                    "crew_aircraft_required": int(rim_req["aircraft_required"]),
+                    "avg_start_capacity": float(np.mean(avg_start)),
+                    "avg_end_capacity": float(np.mean(avg_end)),
+                    "tai": int(TAI),
+                    "overhead": int(Overhead),
+                    "sortie_attrition": float(SortieAttr / 100.0),
+                }
+
+                # Simple status indicator
+                if delta_start >= 0 and delta_end >= 0:
+                    st.success("RIM requirement is within simulated capacity for this pattern.")
+                elif delta_start >= 0 and delta_end < 0:
+                    st.warning("You start the day within RIM, but end-of-day capacity drops below requirement.")
+                else:
+                    st.error("Simulated capacity is below RIM requirement for most of the day.")
+            except Exception as e:
+                st.warning(f"RIM comparison to availability not available: {e}")
 
         # --- Display Results & Charts ---
         st.subheader(f"📊 Weekly Results — Week {sel_w}")
