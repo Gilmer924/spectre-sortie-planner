@@ -83,7 +83,8 @@ sim_options = [
     "Weekly Simulation",
     "Personnel Simulation",
     "Quick Probability Analysis",
-    "Annual Historical Simulation"
+    "Annual Historical Simulation",
+    "RIM / North Star Analysis (beta)",
 ]
 sim_choice = st.sidebar.selectbox("Choose Simulation Module", sim_options)
 
@@ -265,14 +266,10 @@ if sim_choice == "Weekly Simulation":
             )
         )
 
-    selected_week = st.selectbox(
-        "View Results for Week",
-        list(range(1, num_weeks + 1)),
-        key="weekly_selected_week"
-    )
+    # --- Run button: store full multi-week trials in session state ---
+    run_clicked = st.button("Run Weekly Simulation")
 
-    # --- Run Simulation ---
-    if st.button("Run Weekly Simulation", key="btn_run_weekly"):
+    if run_clicked:
         params = {
             "TAI": TAI,
             "Overhead": Overhead,
@@ -286,24 +283,55 @@ if sim_choice == "Weekly Simulation":
             "ASD (hrs)": ASD,
             "weeks": num_weeks,
             "turn_patterns": all_weeks_patterns,
-            "weekend_duty": weekend_flags
+            "weekend_duty": weekend_flags,
         }
-        st.session_state.weekly_data = (run_weekly_simulation(params, Trials), selected_week)
+
+        trials = run_weekly_simulation(params, Trials)
+
+        # Store everything needed to re-slice without re-running
+        st.session_state["weekly_trials_data"] = trials              # list of trials, each = list of weeks
+        st.session_state["weekly_num_weeks_data"] = num_weeks
+        st.session_state["weekly_patterns_data"] = all_weeks_patterns
+        st.session_state["weekly_weekend_flags_data"] = weekend_flags
+
+        # Default view to Week 1 on a fresh run
+        st.session_state["weekly_selected_week"] = 1
+
+    # --- Week selector: use stored num_weeks if available ---
+    effective_weeks = int(st.session_state.get("weekly_num_weeks_data", num_weeks))
+    selected_week = st.selectbox(
+        "View Results for Week",
+        list(range(1, effective_weeks + 1)),
+        key="weekly_selected_week",
+    )
 
     # --- Display Results if Available ---
-    if "weekly_data" in st.session_state:
-        trials_data, sel_w = st.session_state["weekly_data"]
+    if "weekly_trials_data" in st.session_state:
+        trials_data = st.session_state["weekly_trials_data"]
+
+        # Guard: if something weird got stored, bail cleanly
+        if isinstance(trials_data, int):
+            st.error("Weekly trials data is malformed. Please rerun the Weekly Simulation.")
+            st.stop()
+
+        sel_w = int(selected_week)  # 1-based index
+
+        # Use patterns / weekend flags from the run, not current sidebar
+        patterns_run = st.session_state.get("weekly_patterns_data", all_weeks_patterns)
+        weekend_flags_run = st.session_state.get("weekly_weekend_flags_data", weekend_flags)
+
+        # Safety: clamp selected week to available weeks
+        max_weeks_from_data = len(trials_data[0]) if trials_data and isinstance(trials_data[0], list) else effective_weeks
+        sel_w = max(1, min(sel_w, max_weeks_from_data))
+
+        # Slice out the selected week from all trials
         week_results = [trial[sel_w - 1] for trial in trials_data]
         df = pd.DataFrame(week_results)
 
-        # ── Compute daily scheduled sorties from patterns ───────────────
-        raw_patterns = all_weeks_patterns[sel_w - 1]  # Mon–Sun strings
-        # parse “NxM” per day
-        go_lists = [list(map(int, re.findall(r"(\d+)", pat))) for pat in raw_patterns]
-        first_go_vals = [gl[0] if len(gl) >= 1 else 0 for gl in go_lists]
-        second_go_vals = [gl[1] if len(gl) >= 2 else 0 for gl in go_lists]
+        days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-        # Scheduled sorties per day (all goes) for each trial
+        # ── Compute daily scheduled sorties from *stored* patterns ──────
+        raw_patterns = patterns_run[sel_w - 1]  # e.g. ["10x8","10x8","8x6","8x6","8x6","0x0","0x0"]
         daily_sched_matrix = np.array([
             [sum(map(int, re.findall(r"\d+", pat))) for pat in raw_patterns]
             for _ in week_results
@@ -324,14 +352,21 @@ if sim_choice == "Weekly Simulation":
             for sched_row, loss_row in zip(daily_sched_matrix, daily_losses)
         ], axis=0)
 
-        # 3) Availability (start / end)
+        # ── Availability (start / end) ───────────────────────────────────
         avg_start = np.stack(df["daily_available_start"].values).mean(axis=0)
-        avg_end = np.stack(df["daily_available_end"].values).mean(axis=0)
+        avg_end   = np.stack(df["daily_available_end"].values).mean(axis=0)
 
-        # ── Enhanced Over-commitment Alerts ──────────────────────────
+        # ── Parse turn patterns into first/second-go lists ───────────────
+        go_lists = [
+            list(map(int, re.findall(r"(\d+)", pat)))
+            for pat in raw_patterns
+        ]
+        first_go_vals  = [gl[0] if len(gl) >= 1 else 0 for gl in go_lists]
+        second_go_vals = [gl[1] if len(gl) >= 2 else 0 for gl in go_lists]
+
+        # ── Enhanced Over-commitment Alerts ─────────────────────────────
         with st.expander("⚠️ Alerts & Warnings (click to collapse)", expanded=True):
             for idx, day in enumerate(days):
-                # first-go sorties from pattern (e.g., “10x8” → 10)
                 first_go = int(first_go_vals[idx]) if idx < len(first_go_vals) else 0
                 avail = avg_start[idx]
                 commit_pct = (first_go / avail * 100) if avail > 0 else 0
@@ -342,19 +377,30 @@ if sim_choice == "Weekly Simulation":
                         f"(threshold={commit_thresh:.0f}%)"
                     )
 
-        # ── RISK METRICS & SUGGESTIONS ────────────────────────
-        mnd_risk = sum(1 for r in week_results if r["mnd"] > 0) / len(week_results) * 100
-        abort_risk = sum(1 for r in week_results if r["ground_aborts"] > 0) / len(week_results) * 100
-        risk_msg = f"MND-Risk: {mnd_risk:.1f}% | Abort-Risk: {abort_risk:.1f}%"
+        # ── RISK METRICS & SUGGESTIONS (Revised) ────────────────────────
+        mnd_events   = [r.get("mnd", 0) for r in week_results]
+        abort_events = [r.get("ground_aborts", 0) for r in week_results]
 
-        if mnd_risk > 10 or abort_risk > 10:
-            st.error(risk_msg + " → HIGH risk of failure!")
-        elif mnd_risk > 5 or abort_risk > 5:
-            st.warning(risk_msg + " → Medium risk; consider adjustments.")
+        avg_mnd    = float(np.mean(mnd_events)) if mnd_events else 0.0
+        avg_aborts = float(np.mean(abort_events)) if abort_events else 0.0
+
+        # Probability of at least one event in a week
+        p_any_mnd   = 100.0 * sum(1 for x in mnd_events   if x > 0) / len(mnd_events)   if mnd_events   else 0.0
+        p_any_abort = 100.0 * sum(1 for x in abort_events if x > 0) / len(abort_events) if abort_events else 0.0
+
+        risk_msg = (
+            f"Avg MNDs/week: {avg_mnd:.2f} | Avg Aborts/week: {avg_aborts:.2f}  \n"
+            f"P(any MND): {p_any_mnd:.1f}% | P(any abort): {p_any_abort:.1f}%"
+        )
+
+        if p_any_mnd > 20 or avg_mnd >= 1.0:
+            st.error(risk_msg + " → HIGH MND risk.")
+        elif p_any_mnd > 5 or avg_mnd > 0.25:
+            st.warning(risk_msg + " → Moderate MND risk.")
         else:
-            st.success(risk_msg + " → Low risk 👍")
+            st.success(risk_msg + " → Low MND risk 👍")
 
-        if mnd_risk > 5 and not weekend_flags[sel_w - 1]:
+        if (p_any_mnd > 5 or avg_mnd > 0.25) and not weekend_flags_run[sel_w - 1]:
             st.info("💡 Suggestion: enable Weekend Duty for repairs.")
         if any(s > 0.9 * a for s, a in zip(avg_sched, avg_end)):
             st.info("💡 Suggestion: reduce daily pattern to build buffer.")
@@ -362,7 +408,6 @@ if sim_choice == "Weekly Simulation":
             st.info("💡 Suggestion: increase short-turn fix rates.")
 
         # ── Turn-Factor Calculation (fleet-level) ──────────────────────
-        # Sum of first & second goes (your 'N-turn' interpretation)
         sum_first = sum(first_go_vals)
         sum_second = sum(second_go_vals)
         if sum_first > 0:
@@ -376,6 +421,13 @@ if sim_choice == "Weekly Simulation":
             f"{turn_factor:.2f}  \n"
             f"→ Sum of First-Go={sum_first}, Second-Go={sum_second}"
         )
+
+        # Share TF with the RIM / NS module
+        try:
+            st.session_state["weekly_turn_factor"] = float(turn_factor)
+        except Exception:
+            pass
+
 
         # --- Display Results & Charts ---
         st.subheader(f"📊 Weekly Results — Week {sel_w}")
@@ -438,14 +490,13 @@ if sim_choice == "Weekly Simulation":
             )
             st.plotly_chart(fig3, use_container_width=True, key="weekly_fig_availability")
 
-
         # 4) Breaks vs Fix Completions
         with col4:
             breaks_mean = df["breaks"].mean()
             fixes_mean  = df["fix_completed"].mean()
             breaks_std  = df["breaks"].std()
             fixes_std   = df["fix_completed"].std()
-        
+
             fig4 = go.Figure()
             fig4.add_trace(go.Bar(
                 x=["Breaks","Fixes"],
@@ -480,6 +531,7 @@ if sim_choice == "Weekly Simulation":
                 "given your current Turn Factor and a monthly crew requirement."
             )
 
+            # Inputs specific to RIM requirement
             rim_col1, rim_col2, rim_col3 = st.columns(3)
             with rim_col1:
                 crew_ratio = st.number_input(
@@ -509,14 +561,16 @@ if sim_choice == "Weekly Simulation":
                     help="Use your monthly fly days here (not just this week)."
                 )
 
+            # Use your 'Sortie Attrition (%)' as the attrition input for now
             attrition_rate_rim = SortieAttr / 100.0
 
+            # Crew-based requirement (RIM)
             rim_req = compute_crew_aircraft_requirement(
-                pai=int(TAI),  # later we can refine and feed pure PAI
+                pai=int(TAI),  # later we can refine PAI vs BAI/Overhead
                 crew_ratio=float(crew_ratio),
                 sorties_per_crew_month=float(spcm),
                 om_days=int(om_days_rim),
-                turn_factor=float(turn_factor) if not math.isnan(turn_factor) else 1.0,
+                turn_factor=float(turn_factor),
                 attrition_rate=float(attrition_rate_rim),
             )
 
@@ -528,92 +582,89 @@ if sim_choice == "Weekly Simulation":
                 f"- Attrition used: {rim_req['attrition_rate']:.0%}"
             )
 
-        # --- Compare crew-based requirement to simulated availability ---
-        st.subheader("RIM vs Simulated Weekly Capacity")
-        
-        try:
-            # avg_start / avg_end are already computed above for the selected week
-            avg_start_cap = float(np.mean(avg_start))   # start-of-day capacity
-            avg_end_cap   = float(np.mean(avg_end))     # end-of-day capacity
-        
-            rim_ac = rim_req["aircraft_required"]
-            delta_start = avg_start_cap - rim_ac
-            delta_end   = avg_end_cap - rim_ac
-        
-            st.markdown(
-                f"""
-                **Average Start-of-Day Capacity:** {avg_start_cap:.1f} aircraft  
-                **Average End-of-Day Capacity:** {avg_end_cap:.1f} aircraft  
-                **Crew-Based Requirement (RIM):** {rim_ac} aircraft  
+            # --- Compare crew-based requirement to simulated availability ---
+            st.subheader("RIM vs Simulated Weekly Capacity")
 
-                • Start-of-day margin: **{delta_start:+.1f}** aircraft  
-                • End-of-day margin: **{delta_end:+.1f}** aircraft  
-                """
-            )
+            try:
+                # avg_start / avg_end are already computed above for the selected week
+                avg_start_cap = float(np.mean(avg_start))   # start-of-day capacity
+                avg_end_cap   = float(np.mean(avg_end))     # end-of-day capacity
 
-            # --- Store a simple summary for future dashboards/modules ---
-            st.session_state["weekly_rim_summary"] = {
-                "turn_factor": float(turn_factor),
-                "crew_aircraft_required": int(rim_req["aircraft_required"]),
-                "avg_start_capacity": float(np.mean(avg_start)),
-                "avg_end_capacity": float(np.mean(avg_end)),
-                "tai": int(TAI),
-                "overhead": int(Overhead),
-                "sortie_attrition": float(SortieAttr / 100.0),
-            }
+                rim_ac = rim_req["aircraft_required"]
+                delta_start = avg_start_cap - rim_ac
+                delta_end   = avg_end_cap - rim_ac
 
-            # Simple status indicator
-            if delta_start >= 0 and delta_end >= 0:
-                st.success("RIM requirement is within simulated capacity for this pattern.")
-            elif delta_start >= 0 and delta_end < 0:
-                st.warning("You start the day within RIM, but end-of-day capacity drops below requirement.")
-            else:
-                st.error("Simulated capacity is below RIM requirement for most of the day.")
+                st.markdown(
+                    f"""
+                    **Average Start-of-Day Capacity:** {avg_start_cap:.1f} aircraft  
+                    **Average End-of-Day Capacity:** {avg_end_cap:.1f} aircraft  
+                    **Crew-Based Requirement (RIM):** {rim_ac} aircraft  
 
-            # ===============================
-            # ⭐ STEP 3: 30-Day RIM PROJECTION
-            # ===============================
-            st.markdown("---")
-            st.subheader("📈 30-Day RIM Projection (Experimental)")
+                    • Start-of-day margin: **{delta_start:+.1f}** aircraft  
+                    • End-of-day margin: **{delta_end:+.1f}** aircraft  
+                    """
+                )
 
-            degrade_1 = st.number_input(
-                "Known upcoming degraders in next 30 days",
-                min_value=0,
-                value=0,
-                step=1,
-                key="rim_proj_degrade_known",
-                help="E.g., scheduled phase, HSC, ISO, long-term NMCM, etc."
-            )
+                # --- Store a simple summary for future dashboards/modules ---
+                st.session_state["weekly_rim_summary"] = {
+                    "turn_factor": float(turn_factor),
+                    "crew_aircraft_required": int(rim_ac),
+                    "avg_start_capacity": avg_start_cap,
+                    "avg_end_capacity": avg_end_cap,
+                    "tai": int(TAI),
+                    "overhead": int(Overhead),
+                    "sortie_attrition": float(SortieAttr / 100.0),
+                }
 
-            degrade_2 = st.number_input(
-                "Unscheduled/predictive degraders",
-                min_value=0,
-                value=0,
-                step=1,
-                key="rim_proj_degrade_predictive",
-                help="E.g., expected breaks from trend, cann requirements, supply delays."
-            )
+                # Simple status indicator
+                if delta_start >= 0 and delta_end >= 0:
+                    st.success("RIM requirement is within simulated capacity for this pattern.")
+                elif delta_start >= 0 and delta_end < 0:
+                    st.warning("You start the day within RIM, but end-of-day capacity drops below requirement.")
+                else:
+                    st.error("Simulated capacity is below RIM requirement for most of the day.")
 
-            total_new_degraders = degrade_1 + degrade_2
+                # ===============================
+                # ⭐ STEP 3: RIM 30-DAY PROJECTION
+                # ===============================
+                st.markdown("---")
+                st.subheader("📈 30-Day RIM Projection (Experimental)")
 
-            projected_ep = max(avg_start_cap - total_new_degraders, 0)
-            projected_margin = projected_ep - rim_ac
+                degrade_1 = st.number_input(
+                    "Known upcoming degraders in next 30 days",
+                    min_value=0, value=0, step=1,
+                    key="rim_deg_known",
+                    help="E.g., scheduled phase, HSC, ISO, long-term NMCM, etc."
+                )
 
-            st.info(
-                f"**Projected EP in 30 days:** {projected_ep:.1f} aircraft  \n"
-                f"Degrader impact: –{total_new_degraders} aircraft  \n"
-                f"Projected RIM Margin: **{projected_margin:+.1f} aircraft**"
-            )
+                degrade_2 = st.number_input(
+                    "Unscheduled/predictive degraders",
+                    min_value=0, value=0, step=1,
+                    key="rim_deg_unsched",
+                    help="E.g., expected breaks from trend, cann requirements, supply delays."
+                )
 
-            if projected_margin >= 0:
-                st.success("Projection: You remain inside RIM requirement.")
-            else:
-                st.error("Projection: You fall BELOW RIM requirement — risk of under-supporting flying hour program.")
+                total_new_degraders = degrade_1 + degrade_2
 
-        except Exception as e:
-            st.warning(f"RIM comparison to availability not available: {e}")
+                projected_ep = max(avg_start_cap - total_new_degraders, 0)
+                projected_margin = projected_ep - rim_ac
 
+                st.info(
+                    f"**Projected EP in 30 days:** {projected_ep:.1f} aircraft  \n"
+                    f"Degrader impact: –{total_new_degraders} aircraft  \n"
+                    f"Projected RIM Margin: **{projected_margin:+.1f} aircraft**"
+                )
 
+                if projected_margin >= 0:
+                    st.success("Projection: You remain inside RIM requirement.")
+                else:
+                    st.error(
+                        "Projection: You fall BELOW RIM requirement — risk of under-supporting the flying hour program."
+                    )
+
+            except Exception as e:
+                # If sim hasn't run yet or arrays aren't available
+                st.warning(f"RIM comparison to availability not available: {e}")
 
         # ─────────────────────────────────────────────────────────────
         # RIM / North Star Projection (beta)
@@ -1464,3 +1515,173 @@ elif sim_choice == "Annual Historical Simulation":
             file_name="annual_sim_results.csv",
             mime="text/csv"
         )
+
+elif sim_choice == "RIM / North Star Analysis (beta)":
+    from simulations.rim_requirements import (
+        compute_crew_aircraft_requirement,
+        compute_turn_metrics,
+    )
+
+    st.header("📐 RIM / North Star Analysis (beta)")
+
+    # 1) Pull structure snapshot from Weekly sim if available
+    rim_struct = st.session_state.get("rim_structure_weekly", None)
+
+    if rim_struct:
+        st.subheader("Current Structure Snapshot (from Weekly Simulation)")
+        st.write(
+            f"TAI: {rim_struct['TAI']} | PAI: {rim_struct['PAI']} | BAI: {rim_struct['BAI']}"
+        )
+        st.write(
+            f"NMCM: {rim_struct['NMCM']} | NMCS: {rim_struct['NMCS']} | "
+            f"NMCB: {rim_struct['NMCB']} | NMC Flyable: {rim_struct['NMC_flyable']} | "
+            f"Depot: {rim_struct['Depot']} | UPNR: {rim_struct['UPNR']}"
+        )
+        pai_default = rim_struct["PAI"]
+    else:
+        st.info(
+            "No structure captured from the Weekly Simulation yet. "
+            "You can either run a weekly sim with RIM enabled, or enter structure manually here."
+        )
+        pai_default = 12
+
+    # 2) Turn pattern / Turn Factor
+    st.subheader("Turn Pattern / Turn Factor")
+
+    # Try to pull TF from weekly sim; if not present, fall back to AM/PM inputs
+    tf_from_weekly = st.session_state.get("weekly_turn_factor", None)
+
+    tf_col1, tf_col2 = st.columns(2)
+    with tf_col1:
+        am = st.number_input(
+            "AM lines (first go)",
+            min_value=1,
+            value=10,
+            step=1,
+            key="rim_am_lines",
+        )
+        pm = st.number_input(
+            "PM lines (second go)",
+            min_value=0,
+            value=8,
+            step=1,
+            key="rim_pm_lines",
+        )
+
+    tf_metrics = compute_turn_metrics(am=int(am), pm=int(pm))
+    turn_factor = tf_metrics["turn_factor"]
+
+    # If Weekly Sim already computed a TF, show it for reference
+    if tf_from_weekly is not None:
+        st.caption(
+            f"Weekly Sim Turn Factor: {tf_from_weekly:.2f} sorties/jet/day  \n"
+            f"Local Turn Factor (AM/PM above): ({tf_metrics['am']} + {tf_metrics['pm']}) / {tf_metrics['am']} "
+            f"= {turn_factor:.2f} sorties/jet/day"
+        )
+    else:
+        st.caption(
+            f"Turn Factor = (AM + PM) / AM = ({tf_metrics['am']} + {tf_metrics['pm']}) / {tf_metrics['am']} "
+            f"= {turn_factor:.2f} sorties/jet/day"
+        )
+
+    # 3) Crew requirement inputs and calculation
+    st.subheader("Crew-Based Aircraft Requirement (RIM)")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        pai = st.number_input(
+            "PAI used for crews",
+            min_value=0,
+            value=pai_default,
+            step=1,
+            key="rim_pai_input",
+        )
+    with c2:
+        crew_ratio = st.number_input(
+            "Crew Ratio (crews per aircraft)",
+            min_value=0.0,
+            value=1.2,
+            step=0.1,
+            key="rim_crew_ratio_input",
+        )
+    with c3:
+        spcm = st.number_input(
+            "Sorties per Crew per Month (SPCM)",
+            min_value=0.0,
+            value=4.0,
+            step=0.5,
+            key="rim_spcm_input",
+        )
+    with c4:
+        om_days_rim = st.number_input(
+            "O&M Days in Month",
+            min_value=1,
+            value=20,
+            step=1,
+            key="rim_om_days_input",
+        )
+
+    attr_col1, _ = st.columns(2)
+    with attr_col1:
+        attrition_rate = st.number_input(
+            "Sortie Attrition (0–1)",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.20,
+            step=0.01,
+            key="rim_attrition_input",
+            help="Fraction of scheduled sorties that fall out (e.g. 0.20 = 20%).",
+        )
+
+    if st.button("Compute RIM Requirement", key="rim_compute_button"):
+        rim_req = compute_crew_aircraft_requirement(
+            pai=int(pai),
+            crew_ratio=float(crew_ratio),
+            sorties_per_crew_month=float(spcm),
+            om_days=int(om_days_rim),
+            turn_factor=float(turn_factor),
+            attrition_rate=float(attrition_rate),
+        )
+
+        st.success(
+            f"Crew-based aircraft required: **{rim_req['aircraft_required']}**"
+        )
+        st.write(
+            f"- Net sorties per month (crews): {rim_req['net_sorties_month']:.1f}  \n"
+            f"- Daily net sorties: {rim_req['daily_net_sorties']:.1f}  \n"
+            f"- Daily gross lines (after attrition): {rim_req['daily_gross_lines']:.1f}  \n"
+            f"- Turn Factor used: {rim_req['turn_factor']:.2f}  \n"
+            f"- Attrition used: {rim_req['attrition_rate']:.0%}"
+        )
+
+        # 4) Simple comparison to structure, if we have it
+        if rim_struct:
+            ep_struct = max(
+                0,
+                rim_struct["PAI"]
+                - (
+                    rim_struct["NMCM"]
+                    + rim_struct["NMCS"]
+                    + rim_struct["NMCB"]
+                    + rim_struct["Depot"]
+                    + rim_struct["UPNR"]
+                ),
+            )
+            margin = ep_struct - rim_req["aircraft_required"]
+
+            st.subheader("RIM vs Structural Capacity (Rough Cut)")
+            st.write(
+                f"EP (from structure, approx): **{ep_struct}** aircraft  \n"
+                f"Crew-based requirement: **{rim_req['aircraft_required']}** aircraft  \n"
+                f"Margin: **{margin:+d}** aircraft"
+            )
+
+            if margin >= 0:
+                st.success(
+                    "Structure appears sufficient to cover crew-based RIM requirement (rough view)."
+                )
+            else:
+                st.error(
+                    "Structure appears short of RIM requirement — something is blocking capacity "
+                    "(Depot, NMC, UPNR, etc.)."
+                )
