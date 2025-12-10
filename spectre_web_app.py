@@ -18,6 +18,8 @@ from io import BytesIO
 from PIL import Image
 # RIM / North Star projection engine
 from simulations.rim_projection import RIMProjectionInputs, project_rim_as_dicts
+from simulations.rim_requirements import compute_crew_aircraft_requirement
+
 
 # ---------- Turn Factor Helpers ----------
 
@@ -430,92 +432,92 @@ if sim_choice == "Weekly Simulation":
 
 
         # --- Display Results & Charts ---
-        st.subheader(f"📊 Weekly Results — Week {sel_w}")
+        # st.subheader(f"📊 Weekly Results — Week {sel_w}")
 
-        col1, col2, col3, col4 = st.columns(4)
+        # col1, col2, col3, col4 = st.columns(4)
 
-        # 1) Sorties Flown Distribution
-        with col1:
-            flown = df["flown"]
-            fig1 = go.Figure()
-            fig1.add_trace(go.Histogram(x=flown, nbinsx=15, name="Flown"))
-            fig1.update_layout(
-                title="Sorties Flown Distribution",
-                xaxis_title="Sorties Flown",
-                yaxis_title="Frequency"
-            )
-            st.plotly_chart(fig1, use_container_width=True, key="weekly_fig_flown_dist")
+        # # 1) Sorties Flown Distribution
+        # with col1:
+        #     flown = df["flown"]
+        #     fig1 = go.Figure()
+        #     fig1.add_trace(go.Histogram(x=flown, nbinsx=15, name="Flown"))
+        #     fig1.update_layout(
+        #         title="Sorties Flown Distribution",
+        #         xaxis_title="Sorties Flown",
+        #         yaxis_title="Frequency"
+        #     )
+        #     st.plotly_chart(fig1, use_container_width=True, key="weekly_fig_flown_dist")
 
-        # 2) Scheduled vs Avg Flown
-        with col2:
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=days, y=avg_sched, mode="lines+markers", name="Scheduled"))
-            fig2.add_trace(go.Scatter(x=days, y=avg_flown, mode="lines+markers", name="Avg Flown"))
-            fig2.update_layout(
-                title="Scheduled vs Avg Flown",
-                xaxis_title="Day",
-                yaxis_title="Sorties"
-            )
-            st.plotly_chart(fig2, use_container_width=True, key="weekly_fig_sched_vs_flown")
+        # # 2) Scheduled vs Avg Flown
+        # with col2:
+        #     fig2 = go.Figure()
+        #     fig2.add_trace(go.Scatter(x=days, y=avg_sched, mode="lines+markers", name="Scheduled"))
+        #     fig2.add_trace(go.Scatter(x=days, y=avg_flown, mode="lines+markers", name="Avg Flown"))
+        #     fig2.update_layout(
+        #         title="Scheduled vs Avg Flown",
+        #         xaxis_title="Day",
+        #         yaxis_title="Sorties"
+        #     )
+        #     st.plotly_chart(fig2, use_container_width=True, key="weekly_fig_sched_vs_flown")
 
-        with col3:
-            fig3 = go.Figure()
-            fig3.add_trace(go.Scatter(
-                x=days,
-                y=avg_end,
-                mode="lines",
-                name="End-of-Day Avail",
-                line=dict(width=2)
-            ))
-            fig3.add_trace(go.Scatter(
-                x=days,
-                y=avg_start,
-                mode="lines",
-                name="Start-of-Day Avail",
-                line=dict(width=2)
-            ))
-            fig3.add_trace(go.Scatter(
-                x=days + days[::-1],
-                y=list(avg_end) + list(avg_start[::-1]),
-                fill='toself',
-                fillcolor='rgba(0,100,200,0.2)',
-                line=dict(color='rgba(255,255,255,0)'),
-                showlegend=False
-            ))
-            fig3.update_layout(
-                title="Avg Daily Availability (Start → End)",
-                xaxis_title="Day of Week",
-                yaxis_title="Aircraft Available",
-                legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98)
-            )
-            st.plotly_chart(fig3, use_container_width=True, key="weekly_fig_availability")
+        # with col3:
+        #     fig3 = go.Figure()
+        #     fig3.add_trace(go.Scatter(
+        #         x=days,
+        #         y=avg_end,
+        #         mode="lines",
+        #         name="End-of-Day Avail",
+        #         line=dict(width=2)
+        #     ))
+        #     fig3.add_trace(go.Scatter(
+        #         x=days,
+        #         y=avg_start,
+        #         mode="lines",
+        #         name="Start-of-Day Avail",
+        #         line=dict(width=2)
+        #     ))
+        #     fig3.add_trace(go.Scatter(
+        #         x=days + days[::-1],
+        #         y=list(avg_end) + list(avg_start[::-1]),
+        #         fill='toself',
+        #         fillcolor='rgba(0,100,200,0.2)',
+        #         line=dict(color='rgba(255,255,255,0)'),
+        #         showlegend=False
+        #     ))
+        #     fig3.update_layout(
+        #         title="Avg Daily Availability (Start → End)",
+        #         xaxis_title="Day of Week",
+        #         yaxis_title="Aircraft Available",
+        #         legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98)
+        #     )
+        #     st.plotly_chart(fig3, use_container_width=True, key="weekly_fig_availability")
 
-        # 4) Breaks vs Fix Completions
-        with col4:
-            breaks_mean = df["breaks"].mean()
-            fixes_mean  = df["fix_completed"].mean()
-            breaks_std  = df["breaks"].std()
-            fixes_std   = df["fix_completed"].std()
+        # # 4) Breaks vs Fix Completions
+        # with col4:
+        #     breaks_mean = df["breaks"].mean()
+        #     fixes_mean  = df["fix_completed"].mean()
+        #     breaks_std  = df["breaks"].std()
+        #     fixes_std   = df["fix_completed"].std()
 
-            fig4 = go.Figure()
-            fig4.add_trace(go.Bar(
-                x=["Breaks","Fixes"],
-                y=[breaks_mean, fixes_mean],
-                error_y=dict(type="data", array=[breaks_std, fixes_std]),
-                marker_color=["salmon","skyblue"]
-            ))
-            fig4.update_layout(
-                title="Avg Breaks vs Fix Completions",
-                yaxis_title="Count"
-            )
-            st.plotly_chart(fig4, use_container_width=True, key="weekly_fig_breaks_vs_fixes")
+        #     fig4 = go.Figure()
+        #     fig4.add_trace(go.Bar(
+        #         x=["Breaks","Fixes"],
+        #         y=[breaks_mean, fixes_mean],
+        #         error_y=dict(type="data", array=[breaks_std, fixes_std]),
+        #         marker_color=["salmon","skyblue"]
+        #     ))
+        #     fig4.update_layout(
+        #         title="Avg Breaks vs Fix Completions",
+        #         yaxis_title="Count"
+        #     )
+        #     st.plotly_chart(fig4, use_container_width=True, key="weekly_fig_breaks_vs_fixes")
 
-        # --- Compute Weekly Hours Flown ---
-        df["hours_flown"] = df["flown"] * ASD
+        # # --- Compute Weekly Hours Flown ---
+        # df["hours_flown"] = df["flown"] * ASD
 
-        # --- Final Summary Table ---
-        st.subheader("📋 Weekly Summary Statistics")
-        st.dataframe(df.describe().transpose())
+        # # --- Final Summary Table ---
+        # st.subheader("📋 Weekly Summary Statistics")
+        # st.dataframe(df.describe().transpose())
 
         # ============================
         # ⭐ RIM / NS Crew Requirement (Experimental)
@@ -743,7 +745,7 @@ if sim_choice == "Weekly Simulation":
                         help="Aircraft away from home station."
                     )
                 with c11:
-                    rim_alert = st.number_input(
+                    op_alert = st.number_input(
                         "Alert Requirement",
                         min_value=0,
                         value=0,
@@ -794,7 +796,7 @@ if sim_choice == "Weekly Simulation":
                     nmcb=int(rim_nmcb),
                     nmc_flyable=int(rim_nmc_fly),
                     deployed=int(rim_deployed),
-                    alert=int(rim_alert),
+                    alert=int(op_alert),
                     spares_bin=int(rim_spares_bin),
                     horizon_days=int(rim_horizon),
                     daily_training_am=daily_training_am,
@@ -1516,172 +1518,704 @@ elif sim_choice == "Annual Historical Simulation":
             mime="text/csv"
         )
 
+# ─── RIM / NORTH STAR ANALYSIS (BETA) ────────────────────────────────
 elif sim_choice == "RIM / North Star Analysis (beta)":
-    from simulations.rim_requirements import (
-        compute_crew_aircraft_requirement,
-        compute_turn_metrics,
+    from simulations.rim_requirements import compute_crew_aircraft_requirement
+
+    st.header("⭐ RIM / North Star Analysis (beta)")
+
+    st.markdown(
+        "This mode looks at your fleet structure, degraders, and crew demand to "
+        "estimate the aircraft required to meet your crew flying requirements."
     )
 
-    st.header("📐 RIM / North Star Analysis (beta)")
+    # ==========================
+    # 1) Inventory & Structure
+    # ==========================
+    st.subheader("Fleet Structure")
 
-    # 1) Pull structure snapshot from Weekly sim if available
-    rim_struct = st.session_state.get("rim_structure_weekly", None)
-
-    if rim_struct:
-        st.subheader("Current Structure Snapshot (from Weekly Simulation)")
-        st.write(
-            f"TAI: {rim_struct['TAI']} | PAI: {rim_struct['PAI']} | BAI: {rim_struct['BAI']}"
-        )
-        st.write(
-            f"NMCM: {rim_struct['NMCM']} | NMCS: {rim_struct['NMCS']} | "
-            f"NMCB: {rim_struct['NMCB']} | NMC Flyable: {rim_struct['NMC_flyable']} | "
-            f"Depot: {rim_struct['Depot']} | UPNR: {rim_struct['UPNR']}"
-        )
-        pai_default = rim_struct["PAI"]
-    else:
-        st.info(
-            "No structure captured from the Weekly Simulation yet. "
-            "You can either run a weekly sim with RIM enabled, or enter structure manually here."
-        )
-        pai_default = 12
-
-    # 2) Turn pattern / Turn Factor
-    st.subheader("Turn Pattern / Turn Factor")
-
-    # Try to pull TF from weekly sim; if not present, fall back to AM/PM inputs
-    tf_from_weekly = st.session_state.get("weekly_turn_factor", None)
-
-    tf_col1, tf_col2 = st.columns(2)
-    with tf_col1:
-        am = st.number_input(
-            "AM lines (first go)",
-            min_value=1,
-            value=10,
+    inv_col1, inv_col2 = st.columns(2)
+    with inv_col1:
+        rim_tai = st.number_input(
+            "TAI (Total Aircraft Inventory)",
+            value=18,
             step=1,
-            key="rim_am_lines",
+            key="rim_tai",
         )
-        pm = st.number_input(
-            "PM lines (second go)",
+        rim_pai = st.number_input(
+            "PAI (Primary Aircraft Inventory)",
+            value=16,
+            step=1,
+            key="rim_pai",
+            help="Primary aircraft resourced for crews and flying hours."
+        )
+    with inv_col2:
+        rim_depot = st.number_input(
+            "Depot / Programmed (PDM, mods, etc.)",
+            value=1,
+            step=1,
+            key="rim_depot",
+        )
+        rim_upnr = st.number_input(
+            "UPNR (Unprogrammed / Reserve)",
+            value=1,
+            step=1,
+            key="rim_upnr",
+            help="Aircraft held in non-flying reserve / awaiting disposition."
+        )
+
+    # Derived structure
+    rim_pai = min(int(rim_pai), int(rim_tai))
+    rim_bai = max(int(rim_tai) - int(rim_pai), 0)
+    nonposs = max(int(rim_depot) + int(rim_upnr), 0)
+    possessed = max(int(rim_tai) - nonposs, 0)
+
+    st.markdown(
+        f"""
+        **Structure snapshot**  
+        • TAI: **{rim_tai}**  
+        • PAI: **{rim_pai}**  
+        • BAI: **{rim_bai}** (TAI − PAI)  
+        • Depot + UPNR (non-possessed): **{nonposs}**  
+        • Possessed: **{possessed}** (TAI − Depot − UPNR)
+        """
+    )
+
+    # ==========================
+    # 2a) Operational Requirements (non-crew)
+    # ==========================
+    st.subheader("Operational Requirements (non-crew)")
+
+    # Initialize to zero so they're always defined even if something above changes
+    op_spares = 0
+    op_trainers = 0
+    op_fleet = 0
+    op_contg = 0
+    op_alert = 0
+
+    or_c1, or_c2, or_c3 = st.columns(3)
+
+    with or_c1:
+        op_spares = st.number_input(
+            "Spares (tails held aside)",
             min_value=0,
-            value=8,
+            value=0,
             step=1,
-            key="rim_pm_lines",
+            key="rim_op_spares",
+            help="Pure spares that normally don't generate planned line sorties."
         )
-
-    tf_metrics = compute_turn_metrics(am=int(am), pm=int(pm))
-    turn_factor = tf_metrics["turn_factor"]
-
-    # If Weekly Sim already computed a TF, show it for reference
-    if tf_from_weekly is not None:
-        st.caption(
-            f"Weekly Sim Turn Factor: {tf_from_weekly:.2f} sorties/jet/day  \n"
-            f"Local Turn Factor (AM/PM above): ({tf_metrics['am']} + {tf_metrics['pm']}) / {tf_metrics['am']} "
-            f"= {turn_factor:.2f} sorties/jet/day"
-        )
-    else:
-        st.caption(
-            f"Turn Factor = (AM + PM) / AM = ({tf_metrics['am']} + {tf_metrics['pm']}) / {tf_metrics['am']} "
-            f"= {turn_factor:.2f} sorties/jet/day"
-        )
-
-    # 3) Crew requirement inputs and calculation
-    st.subheader("Crew-Based Aircraft Requirement (RIM)")
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        pai = st.number_input(
-            "PAI used for crews",
+        op_trainers = st.number_input(
+            "Ground Trainers / static / SIM tails",
             min_value=0,
-            value=pai_default,
+            value=0,
             step=1,
-            key="rim_pai_input",
+            key="rim_op_trainers",
         )
-    with c2:
+
+    with or_c2:
+        op_fleet = st.number_input(
+            "Fleet Management / Test / FCF tails",
+            min_value=0,
+            value=0,
+            step=1,
+            key="rim_op_fleet",
+        )
+        op_contg = st.number_input(
+            "Contingency / Exercise package",
+            min_value=0,
+            value=0,
+            step=1,
+            key="rim_op_contg",
+        )
+
+    with or_c3:
+        op_alert = st.number_input(
+            "Alert Requirement (tails/day)",
+            min_value=0,
+            value=0,
+            step=1,
+            key="rim_op_alert",
+            help="Alert / DCA / Homeland Defence tails held on status."
+        )
+        
+        # Total non-crew operational tails (these are reserved before FHP)
+    op_noncrew_total = int(op_spares + op_trainers + op_fleet + op_contg + op_alert)
+
+    st.markdown(
+        f"""
+        **Non-crew operational requirement snapshot**  
+        • Spares: **{op_spares}**  
+        • Ground trainers / static: **{op_trainers}**  
+        • Fleet mgmt / test / FCF: **{op_fleet}**  
+        • Contingency / exercise: **{op_contg}**  
+        • Alert requirement: **{op_alert}**  
+        • **Total non-crew requirement:** **{op_noncrew_total}** tails/day
+        """
+    )
+
+    # ---- Compute non-crew operational requirement total ----
+    op_noncrew_total = (
+        int(op_spares or 0)
+        + int(op_trainers or 0)
+        + int(op_fleet or 0)
+        + int(op_contg or 0)
+        + int(op_alert or 0)
+    )
+
+    # ==========================
+    # 2) Degraders & NMC Bins
+    # ==========================
+    st.subheader("Degraders & NMC Bins")
+
+    degr_c1, degr_c2, degr_c3 = st.columns(3)
+    with degr_c1:
+        rim_nmcm = st.number_input(
+            "NMCM (NMC Maintenance)",
+            value=0,
+            step=1,
+            key="rim_nmcm_beta",
+        )
+        rim_nmcs = st.number_input(
+            "NMCS (NMC Supply)",
+            value=0,
+            step=1,
+            key="rim_nmcs_beta",
+        )
+    with degr_c2:
+        rim_nmcb = st.number_input(
+            "NMCB (Both)",
+            value=0,
+            step=1,
+            key="rim_nmcb_beta",
+        )
+        rim_nmc_fly = st.number_input(
+            "NMC Flyable tails",
+            value=0,
+            step=1,
+            key="rim_nmc_fly_beta",
+            help="Flyable but coded NMC; they add scheduling headroom but do NOT increase EP."
+        )
+    with degr_c3:
+        rim_deployed = st.number_input(
+            "Deployed (EP away from home)",
+            value=0,
+            step=1,
+            key="rim_deployed_beta",
+        )
+        # 🔁 IMPORTANT: no Alert here anymore – Alert is now in the
+        # "Operational Requirements (non-crew)" section as `op_alert`.
+
+    # --- NMC / EP math ---
+    nmc_total = max(int(rim_nmcm) + int(rim_nmcs) + int(rim_nmcb), 0)
+    ep = max(possessed - nmc_total, 0)              # effective possessed (not NMC)
+    ep_home = max(ep - int(rim_deployed), 0)        # EP at home station
+
+    # --- Reserve non-crew operational tails from EP_home ---
+    # These are spares, trainers, fleet mgmt, contingency, and alert tails.
+    # They are still possessed, but not available to cover crew-driven FHP.
+    op_reserved = min(ep_home, op_noncrew_total)
+
+    avail_legacy = max(ep_home - op_reserved, 0)    # legacy FHP tails after all non-crew requirements
+    avail_eff = avail_legacy + max(int(rim_nmc_fly), 0)  # add NMC-flyable headroom
+
+    st.markdown(
+        f"""
+        **Availability math (home station)**  
+        • NMC total (bins): **{nmc_total}**  
+        • EP: **{ep}**  
+        • EP_home (−Deployed): **{ep_home}**  
+
+        **Non-crew reservations (from EP_home)**  
+        • Total non-crew requirement: **{op_noncrew_total}** tails/day  
+        • Non-crew tails actually reserved (capped by EP_home): **{op_reserved}**
+
+        **FHP availability**  
+        • Avail for FHP (legacy, after non-crew): **{avail_legacy}**  
+        • Avail FHP (+NMC Flyable headroom): **{avail_eff}**
+        """
+    )
+
+
+    # ==========================
+    # 3) Crew-Based RIM Requirement
+    # ==========================
+    st.subheader("Crew-Based Requirement (RIM)")
+
+    # --- Base crew ratio input ---
+    cfg_c1, cfg_c2, cfg_c3 = st.columns(3)
+    with cfg_c1:
         crew_ratio = st.number_input(
-            "Crew Ratio (crews per aircraft)",
+            "Crew Ratio (crews per PAI)",
             min_value=0.0,
             value=1.2,
             step=0.1,
-            key="rim_crew_ratio_input",
+            key="rim_crew_ratio_beta",
+            help="Example: 1.2 means 1.2 crews per PAI aircraft."
         )
-    with c3:
+    with cfg_c2:
         spcm = st.number_input(
             "Sorties per Crew per Month (SPCM)",
             min_value=0.0,
             value=4.0,
             step=0.5,
-            key="rim_spcm_input",
+            key="rim_spcm_beta",
+            help="How many sorties each base crew must fly per month."
         )
-    with c4:
-        om_days_rim = st.number_input(
+    with cfg_c3:
+        om_days = st.number_input(
             "O&M Days in Month",
             min_value=1,
             value=20,
             step=1,
-            key="rim_om_days_input",
+            key="rim_om_days_beta",
+            help="Use your monthly fly days (e.g., Mon–Fri x 4 weeks)."
         )
 
-    attr_col1, _ = st.columns(2)
-    with attr_col1:
-        attrition_rate = st.number_input(
-            "Sortie Attrition (0–1)",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.20,
-            step=0.01,
-            key="rim_attrition_input",
-            help="Fraction of scheduled sorties that fall out (e.g. 0.20 = 20%).",
+    # --- Crew demand mode: ratio+overhead vs overhead-only ---
+    demand_mode = st.radio(
+        "Crew demand mode",
+        ["Crew Ratio + Crew Overhead", "Crew Overhead Only"],
+        key="rim_demand_mode_beta",
+        help=(
+            "• Crew Ratio + Crew Overhead: use PAI-based crew ratio and add overhead pools.\n"
+            "• Crew Overhead Only: ignore crew ratio and use only the CMR/BMC crew inputs below."
+        ),
+    )
+
+    # --- Turn Factor selection ---
+    st.markdown("**Turn Factor (TF) — sorties per jet per fly day**")
+    tf_source = st.radio(
+        "Turn Factor source",
+        ["Use from Weekly Simulation (if available)", "Enter manually"],
+        key="rim_tf_source_beta",
+    )
+
+    tf_default = st.session_state.get("weekly_turn_factor", float("nan"))
+    if tf_source == "Use from Weekly Simulation (if available)" and not math.isnan(tf_default):
+        turn_factor = float(tf_default)
+        st.info(f"Using TF from Weekly Simulation: **{turn_factor:.2f}** sorties/jet/day.")
+    else:
+        base_tf = 1.0 if math.isnan(tf_default) else round(float(tf_default), 2)
+        turn_factor = st.number_input(
+            "Turn Factor (TF)",
+            min_value=0.1,
+            value=base_tf,
+            step=0.05,
+            key="rim_tf_manual_beta",
         )
 
-    if st.button("Compute RIM Requirement", key="rim_compute_button"):
-        rim_req = compute_crew_aircraft_requirement(
-            pai=int(pai),
-            crew_ratio=float(crew_ratio),
-            sorties_per_crew_month=float(spcm),
-            om_days=int(om_days_rim),
-            turn_factor=float(turn_factor),
-            attrition_rate=float(attrition_rate),
+    attr_rate = st.slider(
+        "Sortie attrition (for RIM calc) %",
+        min_value=0.0,
+        max_value=50.0,
+        value=20.0,
+        step=1.0,
+        key="rim_attr_rate_beta",
+    ) / 100.0
+
+    # --- Crew Overhead (CMR/BMC mix) ---
+    extra_crews = []
+
+    with st.expander("Crew Overhead (CMR/BMC mix)", expanded=False):
+        st.caption(
+            "Use this to add specific crew pools with their own sortie requirements, "
+            "e.g. CMR/BMC Wingmen and Flight Leads."
         )
 
-        st.success(
-            f"Crew-based aircraft required: **{rim_req['aircraft_required']}**"
-        )
-        st.write(
-            f"- Net sorties per month (crews): {rim_req['net_sorties_month']:.1f}  \n"
-            f"- Daily net sorties: {rim_req['daily_net_sorties']:.1f}  \n"
-            f"- Daily gross lines (after attrition): {rim_req['daily_gross_lines']:.1f}  \n"
-            f"- Turn Factor used: {rim_req['turn_factor']:.2f}  \n"
-            f"- Attrition used: {rim_req['attrition_rate']:.0%}"
-        )
+        group_defs = [
+            ("CMR Wingmen", "cmr_wg"),
+            ("CMR Flight Leads", "cmr_fl"),
+            ("BMC Wingmen", "bmc_wg"),
+            ("BMC Flight Leads", "bmc_fl"),
+        ]
 
-        # 4) Simple comparison to structure, if we have it
-        if rim_struct:
-            ep_struct = max(
-                0,
-                rim_struct["PAI"]
-                - (
-                    rim_struct["NMCM"]
-                    + rim_struct["NMCS"]
-                    + rim_struct["NMCB"]
-                    + rim_struct["Depot"]
-                    + rim_struct["UPNR"]
-                ),
-            )
-            margin = ep_struct - rim_req["aircraft_required"]
-
-            st.subheader("RIM vs Structural Capacity (Rough Cut)")
-            st.write(
-                f"EP (from structure, approx): **{ep_struct}** aircraft  \n"
-                f"Crew-based requirement: **{rim_req['aircraft_required']}** aircraft  \n"
-                f"Margin: **{margin:+d}** aircraft"
-            )
-
-            if margin >= 0:
-                st.success(
-                    "Structure appears sufficient to cover crew-based RIM requirement (rough view)."
+        for label, key_suffix in group_defs:
+            c1, c2 = st.columns(2)
+            with c1:
+                count = st.number_input(
+                    f"{label} – # crews",
+                    min_value=0,
+                    value=0,
+                    step=1,
+                    key=f"rim_{key_suffix}_count",
                 )
-            else:
-                st.error(
-                    "Structure appears short of RIM requirement — something is blocking capacity "
-                    "(Depot, NMC, UPNR, etc.)."
+            with c2:
+                spcm_extra = st.number_input(
+                    f"{label} – sorties/crew/month",
+                    min_value=0.0,
+                    value=0.0,
+                    step=0.5,
+                    key=f"rim_{key_suffix}_spcm",
                 )
+
+            if count > 0 and spcm_extra > 0:
+                extra_crews.append(
+                    {
+                        "name": label,
+                        "count": float(int(count)),  # enforce whole crews
+                        "spcm": float(spcm_extra),
+                    }
+                )
+
+    # --- Build inputs for the requirement engine ---
+    if demand_mode == "Crew Overhead Only":
+        # Ignore crew ratio; requirement comes only from overhead pools
+        eff_crew_ratio = 0.0
+        eff_spcm = 0.0
+    else:
+        eff_crew_ratio = float(crew_ratio)
+        eff_spcm = float(spcm)
+
+    # Compute requirement
+    rim_req = compute_crew_aircraft_requirement(
+        pai=int(rim_pai),
+        crew_ratio=eff_crew_ratio,
+        sorties_per_crew_month=eff_spcm,
+        om_days=int(om_days),
+        turn_factor=float(turn_factor),
+        attrition_rate=float(attr_rate),
+        extra_crews=extra_crews,
+    )
+
+    # --- Core RIM aircraft requirement (crew-only) ---
+    rim_ac = int(rim_req["aircraft_required"])
+    crew_ac_req = rim_ac
+
+    # We'll fold in non-crew overhead (spares/trainers/etc.) in a moment
+    total_req = crew_ac_req + int(op_noncrew_total)
+
+    # Margins for crew-only and total requirement
+    margin_ep        = ep        - crew_ac_req
+    margin_avail     = avail_eff - crew_ac_req
+    margin_total_req = avail_eff - total_req
+
+    st.markdown("### RIM Summary")
+
+    c_struct, c_avail, c_req = st.columns(3)
+
+    with c_struct:
+        st.markdown(
+            f"""
+            **Inventory / Structure**  
+            • TAI: **{rim_tai}**  
+            • PAI: **{rim_pai}**  
+            • BAI: **{rim_bai}**  
+            • Depot+UPNR: **{nonposs}**  
+            • Possessed: **{possessed}**
+            """
+        )
+
+    with c_avail:
+        st.markdown(
+            f"""
+            **Availability (Home)**  
+            • NMC total: **{nmc_total}**  
+            • EP: **{ep}**  
+            • EP_home: **{ep_home}**  
+            • Avail FHP (legacy): **{avail_legacy}**  
+            • Avail FHP (+NMC Flyable): **{avail_eff}**
+            """
+        )
+
+    # Turn pattern logic: what TF is required vs what TF can be supported
+    lines_required = float(rim_req["daily_gross_lines"])  # scheduled lines/day (post-attrition)
+    tf_used        = float(rim_req["turn_factor"])
+    lines_supportable = avail_eff * tf_used if avail_eff > 0 else 0.0
+    tf_required = (lines_required / avail_eff) if avail_eff > 0 else float("nan")
+
+    with c_req:
+        st.markdown(
+            f"""
+            **Crew-Only RIM Requirement**  
+            • Aircraft required (RIM): **{crew_ac_req}**  
+
+            **Non-crew overhead (daily tails)**  
+            • Spares/Trainers/Fleet/Contingency/Alert: **{op_noncrew_total}**  
+
+            **Total operational requirement**  
+            • **{total_req}** tails/day  
+
+            **Margins (vs Avail FHP + NMC-Flyable)**  
+            • Crew-only margin: **{margin_avail:+.1f}** tails  
+            • Total requirement margin: **{margin_total_req:+.1f}** tails  
+
+            **Turn Pattern View**  
+            • Daily lines required (crew demand): {lines_required:.2f}  
+            • Lines supportable at current TF ({tf_used:.2f}): {lines_supportable:.2f}  
+            • TF required using Avail FHP: {tf_required:.2f} sorties/jet/day
+            """
+        )
+
+    # --- Crew & Sortie Breakdown (flattened 4-panel layout) ---
+    st.markdown("### Crew & Sortie Breakdown")
+
+    bc1, bc2, bc3, bc4 = st.columns(4)
+
+    # Safely pull extra fields (with defaults if your rim_requirements.py is older)
+    base_crews          = float(rim_req.get("base_crews",  crew_ratio * rim_pai))
+    extra_crews_total   = float(rim_req.get("extra_crews_total", 0.0))
+    total_crews         = float(rim_req.get("total_crews", base_crews + extra_crews_total))
+
+    base_month          = float(rim_req.get("base_net_sorties_month", 0.0))
+    extra_month         = float(rim_req.get("extra_net_sorties_month", 0.0))
+    total_month         = float(rim_req.get("net_sorties_month", base_month + extra_month))
+
+    daily_net           = float(rim_req.get("daily_net_sorties", total_month / max(1, om_days)))
+    daily_gross         = float(rim_req.get("daily_gross_lines", daily_net / max(1e-6, 1 - attr_rate)))
+
+    tf_val              = float(rim_req.get("turn_factor", turn_factor))
+    attr_val            = float(rim_req.get("attrition_rate", attr_rate))
+    om_days_val         = int(rim_req.get("om_days", om_days))
+
+    # Enforce whole numbers for crews and sorties (no fractional crews/sorties)
+    base_crews_i        = math.ceil(base_crews)
+    extra_crews_i       = math.ceil(extra_crews_total)
+    total_crews_i       = math.ceil(total_crews)
+
+    daily_net_i         = math.ceil(daily_net)
+    daily_gross_i       = math.ceil(daily_gross)
+    total_month_i       = math.ceil(total_month)
+
+    with bc1:
+        st.markdown(
+            f"""
+            **Crews**  
+            • Base crews (ratio × PAI): {base_crews_i}  
+            • Extra crews (overhead pools): {extra_crews_i}  
+            • **Total crews:** {total_crews_i}
+            """
+        )
+
+    with bc2:
+        st.markdown(
+            f"""
+            **Sorties – Monthly**  
+            • Base crews: {math.ceil(base_month)}  
+            • Extra crews: {math.ceil(extra_month)}  
+            • **Total (executed requirement):** {total_month_i}
+            """
+        )
+
+    with bc3:
+        st.markdown(
+            f"""
+            **Sorties – Daily**  
+            • **Crew requirement (executed):** {daily_net_i} sorties/day  
+            • **Scheduled lines (after attrition):** {daily_gross_i} lines/day  
+            """
+        )
+
+    with bc4:
+        st.markdown(
+            f"""
+            **Assumptions**  
+            • Turn Factor (TF): {tf_val:.2f} sorties/jet/day  
+            • Attrition used: {attr_val:.0%}  
+            • O&M days in month: {om_days_val}  
+
+            _Crew requirement (executed) is fixed by crew ratio and SPCM._  
+            _Attrition increases the **scheduled lines** needed to achieve that requirement._
+            """
+        )
+
+    # --- Overall status based on total requirement ---
+    if margin_total_req >= 0:
+        st.success("RIM requirement (crew + overhead) is within structure and NMC-flyable headroom.")
+    elif margin_avail >= 0:
+        st.warning("Crew-only RIM is covered, but adding overhead pushes you close to the edge.")
+    else:
+        st.error(
+            "Fleet structure is below crew-based RIM requirement — something has to give "
+            "(alert, trainers, fleet mgmt, contingency, or commit rate)."
+        )
+
+    # ==========================
+    # 4) Turn Pattern Recommendation (Crew vs Fleet)
+    # ==========================
+    st.markdown("---")
+    st.subheader("🧮 Turn Pattern Recommendation (Crew vs Fleet)")
+
+    # Crew-demand gross daily lines (after attrition)
+    req_gross = max(float(rim_req.get("daily_gross_lines", 0.0)), 0.0)
+
+    # Turn Factor actually used
+    tf_used = max(float(rim_req.get("turn_factor", turn_factor)), 1e-6)
+
+    # --- Required pattern from crew demand (2-Go baseline) ---
+    req_am_2go = math.ceil(req_gross / tf_used) if req_gross > 0 else 0
+    # raw PM if you literally try to enforce TF with 2 goes
+    raw_pm_2go = math.ceil(req_am_2go * (tf_used - 1.0)) if tf_used > 1 else 0
+    # cap PM so nights are never heavier than days
+    req_pm_2go = min(raw_pm_2go, req_am_2go)
+
+    # --- Supportable pattern based on available fleet (2-Go baseline) ---
+    commit_cap_pct = st.slider(
+        "Commitment Cap for Turn Pattern (%)",
+        min_value=40.0, max_value=100.0,
+        value=65.0, step=1.0,
+        key="rim_commit_cap_turn",
+        help="Upper limit on how much of the available fleet may be committed."
+    )
+    commit_cap = commit_cap_pct / 100.0
+
+    avail_for_tf = max(float(avail_eff), 0.0)
+
+    sup_am_2go = math.floor(avail_for_tf * commit_cap)
+    sup_pm_2go = math.floor(sup_am_2go * (tf_used - 1.0)) if tf_used > 1 else 0
+    sup_pm_2go = min(sup_pm_2go, sup_am_2go)  # same 'night < day' guard
+
+    actual_commit_pct = (
+        sup_am_2go / avail_for_tf * 100.0
+        if avail_for_tf > 0 else 0.0
+    )
+
+    col_req, col_sup, col_assess = st.columns(3)
+
+    # ----------------------------
+    # REQUIRED PATTERN (CREW DEMAND) — 2-Go baseline
+    # ----------------------------
+    with col_req:
+        st.markdown(
+            f"""
+            **Required (Crew Demand — 2-Go)**  
+            • Daily gross sorties (crew-driven): **{req_gross:.1f}**  
+            • Required AM tails: **{req_am_2go}**  
+            • Required PM turns (capped ≤ AM): **{req_pm_2go}**  
+            • **Required pattern (2-Go):** **{req_am_2go} × {req_pm_2go}**  
+            • **TF used:** {tf_used:.2f}
+            """
+        )
+        if abs(tf_used - 1.0) < 1e-6:
+            st.info("TF = 1.0 eliminates PM turns. Increase TF to reduce AM demand.")
+    
+        # ================================
+        # 🟦 Surge Mode Toggle (3rd-Go On/Off)
+        # ================================
+        surge_on = st.checkbox(
+            "Enable 3rd-Go Surge Recommendation",
+            value=False,
+            key="rim_enable_3go",
+            help="Allows a 3rd go to spread sortie demand and reduce PM burden."
+        )
+
+        if surge_on and req_am_2go > 0 and tf_used > 1.0:
+
+            # total sorties required under TF
+            total_sorties = math.ceil(tf_used * req_am_2go)
+            extra_sorties = max(total_sorties - req_am_2go, 0)
+
+            # split extra sorties (approx 70/30) between PM and Go3
+            pm_3go = math.ceil(extra_sorties * 0.70)
+            go3_3go = extra_sorties - pm_3go
+
+            # clamp to avoid impossible patterns
+            pm_3go = max(0, min(pm_3go, req_am_2go))
+            go3_3go = max(0, min(go3_3go, req_am_2go))
+
+            # ensure PM >= Go3
+            if go3_3go > pm_3go:
+                pm_3go, go3_3go = go3_3go, pm_3go
+
+            # recompute TF achieved by this discrete pattern
+            sorties_3go = req_am_2go + pm_3go + go3_3go
+            tf_3go = sorties_3go / req_am_2go if req_am_2go else tf_used
+
+            st.markdown(
+                f"""
+                ### Surge (3-Go) Pattern  
+                • AM: **{req_am_2go}**  
+                • PM: **{pm_3go}**  
+                • 3rd Go: **{go3_3go}**  
+                • **Surge pattern:** **{req_am_2go} × {pm_3go} × {go3_3go}**  
+                • Achieved TF: **{tf_3go:.2f}**
+                """
+            )
+
+    # ----------------------------
+    # SUPPORTABLE PATTERN (FLEET) — 2-Go baseline
+    # ----------------------------
+    with col_sup:
+        st.markdown(
+            f"""
+            **Supportable (Fleet & Cap — 2-Go)**  
+            • Avail for FHP (+NMC Flyable): **{avail_for_tf:.1f}**  
+            • Commit cap: **{commit_cap_pct:.0f}%**  
+            • Supportable AM tails: **{sup_am_2go}**  
+            • Supportable PM turns: **{sup_pm_2go}**  
+            • **Supportable pattern (2-Go):** **{sup_am_2go} × {sup_pm_2go}**  
+            • **Actual Commit % Used:** {actual_commit_pct:.0f}%  
+            • **TF used:** {tf_used:.2f}
+            """
+        )
+
+    # ----------------------------
+    # ASSESSMENT + RECOMMENDATIONS
+    # ----------------------------
+    with col_assess:
+        # Min commit cap required to cover required AM (2-Go)
+        rec_commit_cap = (
+            req_am_2go / avail_for_tf * 100.0
+            if avail_for_tf > 0 else float("inf")
+        )
+
+        # Min TF to hit crew sorties if you limit PM to AM (2-Go assumption)
+        if req_am_2go > 0:
+            rec_tf = req_gross / req_am_2go
+        else:
+            rec_tf = tf_used
+
+        if sup_am_2go >= req_am_2go and sup_pm_2go >= req_pm_2go:
+            st.success("Fleet can support the required crew-driven 2-Go pattern at this commit level.")
+        else:
+            st.error("Fleet cannot support the required crew-driven 2-Go pattern at this commit level.")
+
+        st.markdown(
+            f"""
+            **Recommendations**  
+            • **Min commit rate required (2-Go):** {rec_commit_cap:.0f}%  
+            • **Min TF suggested (holding AM at {req_am_2go}):** {rec_tf:.2f}  
+            """
+        )
+
+
+
+    # ==========================
+    # 4b) 30-Day RIM Projection (What-if)
+    # ==========================
+    st.markdown("---")
+    st.subheader("📈 30-Day RIM Projection (What-if Degraders)")
+
+    proj_c1, proj_c2 = st.columns(2)
+    with proj_c1:
+        degr_sched = st.number_input(
+            "Scheduled degraders in next 30 days",
+            min_value=0,
+            value=0,
+            step=1,
+            key="rim_proj_sched_beta",
+            help="E.g., phase, ISO, PDM, major inspections scheduled."
+        )
+    with proj_c2:
+        degr_unsched = st.number_input(
+            "Expected unscheduled degraders (trend-based)",
+            min_value=0,
+            value=0,
+            step=1,
+            key="rim_proj_unsched_beta",
+            help="E.g., trend-based NMCM, new supply issues, cann birds."
+        )
+
+    total_proj_degr = degr_sched + degr_unsched
+    projected_ep = max(ep - total_proj_degr, 0)
+    projected_margin = projected_ep - rim_ac
+
+    st.info(
+        f"**Projected EP in 30 days:** {projected_ep} tails  \n"
+        f"Total new degraders: **{total_proj_degr}**  \n"
+        f"Projected margin vs RIM: **{projected_margin:+.1f}** aircraft"
+    )
+
+    if projected_margin >= 0:
+        st.success("Projection: you remain inside RIM requirement under this degrader forecast.")
+    else:
+        st.error("Projection: under this degrader forecast, you will fall below RIM requirement.")
