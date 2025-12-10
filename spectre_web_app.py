@@ -76,9 +76,12 @@ except FileNotFoundError:
     st.warning("Logo not found. Add 'spectre_logo.png' to app folder.")
 
 
-#------ RIM Toggle --------
-st.sidebar.markdown("### Experimental Modules")
-enable_rim_ns = st.sidebar.checkbox("Enable RIM / North Star (beta)", value=False)
+# #------ RIM Toggle -------- REMOVED
+# st.sidebar.markdown("### Experimental Modules")
+# enable_rim_ns = st.sidebar.checkbox("Enable RIM / North Star (beta)", value=False)
+
+#          Sidebar section label           
+st.sidebar.markdown(" Simulation Modules ")
 
 # ---------- Simulation Selector ----------
 sim_options = [
@@ -94,12 +97,13 @@ sim_choice = st.sidebar.selectbox("Choose Simulation Module", sim_options)
 if sim_choice == "Weekly Simulation":
     st.header("🗓️ Weekly Sortie Simulation")
 
-    # --- Sidebar Inputs: Core Structure ---
+    # --- Sidebar Inputs: Core structure (no inline RIM here) ---
     TAI = st.sidebar.number_input(
         "Total AC Inventory (TAI)",
         value=12,
         step=1,
         key="weekly_tai",
+        help="Total aircraft on the books for this unit (training + backup)."
     )
 
     Overhead = st.sidebar.number_input(
@@ -107,135 +111,162 @@ if sim_choice == "Weekly Simulation":
         value=2,
         step=1,
         key="weekly_overhead",
-        help="Total NMC aircraft that reduce effective possessed (EP). "
-             "RIM/NS experimental bins below give a richer breakdown."
+        help="Total NMC aircraft that reduce effective possessed (EP) in this week."
     )
 
-    # ── RIM / NS structure (does NOT change sim_engine yet) ───────────────
-    if enable_rim_ns:
-        st.sidebar.markdown("**RIM Structure (Experimental)**")
+    ASD       = st.sidebar.number_input("Avg Sortie Duration (hrs)", value=1.9)
+    Break_pct = st.sidebar.slider("Break Rate (%)", 0.0, 100.0, 16.6)
+    GA_pct    = st.sidebar.slider("Ground Abort Rate (%)", 0.0, 100.0, 7.5)
+    Fix8      = st.sidebar.slider("Fix Rate 8 Hr (%)", 0.0, 100.0, 25.0)
+    Fix12     = st.sidebar.slider("Fix Rate 12 Hr (%)", 0.0, 100.0, 35.0)
+    Fix24     = st.sidebar.slider("Fix Rate 24 Hr (%)", 0.0, 100.0, 45.0)
+    WxAttr    = st.sidebar.slider("Weather Attrition (%)", 0.0, 100.0, 0.0)
+    SortieAttr= st.sidebar.slider("Sortie Attrition (%)", 0.0, 100.0, 20.0)
 
-        PAI = st.sidebar.number_input(
-            "PAI (Primary Aircraft Inventory)",
-            value=TAI,
-            step=1,
-            key="rim_pai",
-            help="Primary aircraft normally used for training/ops."
-        )
-        # BAI derived from TAI - PAI
-        BAI = max(int(TAI) - int(PAI), 0)
-        st.sidebar.caption(f"BAI (Backup Aircraft Inventory) assumed: {BAI} = TAI − PAI")
-
-        st.sidebar.markdown("**Degrader Bins (Overhead Detail)**")
-        rim_nmcm = st.sidebar.number_input(
-            "NMCM (NMC Maintenance)",
-            value=0,
-            step=1,
-            key="rim_nmcm",
-        )
-        rim_nmcs = st.sidebar.number_input(
-            "NMCS (NMC Supply)",
-            value=0,
-            step=1,
-            key="rim_nmcs",
-        )
-        rim_nmcb = st.sidebar.number_input(
-            "NMCB (Both)",
-            value=0,
-            step=1,
-            key="rim_nmcb",
-        )
-        rim_nmc_fly = st.sidebar.number_input(
-            "NMC Flyable tails",
-            value=0,
-            step=1,
-            key="rim_nmc_fly",
-            help="Flyable but still coded NMC (headroom for scheduling, not EP)."
-        )
-        rim_depot = st.sidebar.number_input(
-            "Depot / Programmed (PDM, etc.)",
-            value=0,
-            step=1,
-            key="rim_depot",
-        )
-        rim_upnr = st.sidebar.number_input(
-            "UPNR",
-            value=0,
-            step=1,
-            key="rim_upnr",
-        )
-
-        # Store richer structure for future visualizations / RIM math
-        st.session_state["rim_structure_weekly"] = {
-            "TAI": int(TAI),
-            "PAI": int(PAI),
-            "BAI": int(BAI),
-            "NMCM": int(rim_nmcm),
-            "NMCS": int(rim_nmcs),
-            "NMCB": int(rim_nmcb),
-            "NMC_flyable": int(rim_nmc_fly),
-            "Depot": int(rim_depot),
-            "UPNR": int(rim_upnr),
-            "Overhead_input": int(Overhead),
-        }
-
-    # --- Sidebar Inputs: Reliability / Attrition ---
-    ASD = st.sidebar.number_input(
-        "Avg Sortie Duration (hrs)",
-        value=2.5,
-        step=0.1,
-        key="weekly_asd",
-    )
-    Break_pct = st.sidebar.slider(
-        "Break Rate (%)",
-        0.0, 100.0, 16.6,
-        key="weekly_break",
-    )
-    GA_pct = st.sidebar.slider(
-        "Ground Abort Rate (%)",
-        0.0, 100.0, 7.5,
-        key="weekly_ga",
-    )
-    Fix8 = st.sidebar.slider(
-        "Fix Rate 8 Hr (%)",
-        0.0, 100.0, 20.0,
-        key="weekly_fix8",
-    )
-    Fix12 = st.sidebar.slider(
-        "Fix Rate 12 Hr (%)",
-        0.0, 100.0, 30.0,
-        key="weekly_fix12",
-    )
-    Fix24 = st.sidebar.slider(
-        "Fix Rate 24 Hr (%)",
-        0.0, 100.0, 40.0,
-        key="weekly_fix24",
-    )
-    WxAttr = st.sidebar.slider(
-        "Weather Attrition (%)",
-        0.0, 100.0, 0.0,
-        key="weekly_wx",
-    )
-    SortieAttr = st.sidebar.slider(
-        "Sortie Attrition (%)",
-        0.0, 100.0,
-        20.0,
-        help="Percent of scheduled sorties lost to non-weather causes (not GA)."
-    )
-
-    Trials = st.sidebar.slider(
+    Trials    = st.sidebar.slider(
         "MC Trials",
-        100, 2000, 500,
-        key="weekly_trials",
+        min_value=100,
+        max_value=1000,
+        value=500,
+        step=100,
     )
+
     commit_thresh = st.sidebar.slider(
         "Commitment Rate Threshold (%)",
         min_value=0.0,
         max_value=100.0,
         value=65.0,
-        key="weekly_commit_thresh",
         help="Warn when daily commit rate exceeds this % of available aircraft"
     )
+
+    # ⬇️ leave all your existing turn-pattern inputs, run button, and
+    #     results / charts code as-is below this point
+
+    # ── RIM / NS structure (does NOT change sim_engine yet) ───────────────
+    # if enable_rim_ns:
+    #     st.sidebar.markdown("**RIM Structure (Experimental)**")
+
+    #     PAI = st.sidebar.number_input(
+    #         "PAI (Primary Aircraft Inventory)",
+    #         value=TAI,
+    #         step=1,
+    #         key="rim_pai",
+    #         help="Primary aircraft normally used for training/ops."
+    #     )
+    #     # BAI derived from TAI - PAI
+    #     BAI = max(int(TAI) - int(PAI), 0)
+    #     st.sidebar.caption(f"BAI (Backup Aircraft Inventory) assumed: {BAI} = TAI − PAI")
+
+    #     st.sidebar.markdown("**Degrader Bins (Overhead Detail)**")
+    #     rim_nmcm = st.sidebar.number_input(
+    #         "NMCM (NMC Maintenance)",
+    #         value=0,
+    #         step=1,
+    #         key="rim_nmcm",
+    #     )
+    #     rim_nmcs = st.sidebar.number_input(
+    #         "NMCS (NMC Supply)",
+    #         value=0,
+    #         step=1,
+    #         key="rim_nmcs",
+    #     )
+    #     rim_nmcb = st.sidebar.number_input(
+    #         "NMCB (Both)",
+    #         value=0,
+    #         step=1,
+    #         key="rim_nmcb",
+    #     )
+    #     rim_nmc_fly = st.sidebar.number_input(
+    #         "NMC Flyable tails",
+    #         value=0,
+    #         step=1,
+    #         key="rim_nmc_fly",
+    #         help="Flyable but still coded NMC (headroom for scheduling, not EP)."
+    #     )
+    #     rim_depot = st.sidebar.number_input(
+    #         "Depot / Programmed (PDM, etc.)",
+    #         value=0,
+    #         step=1,
+    #         key="rim_depot",
+    #     )
+    #     rim_upnr = st.sidebar.number_input(
+    #         "UPNR",
+    #         value=0,
+    #         step=1,
+    #         key="rim_upnr",
+    #     )
+
+    #     # Store richer structure for future visualizations / RIM math
+    #     st.session_state["rim_structure_weekly"] = {
+    #         "TAI": int(TAI),
+    #         "PAI": int(PAI),
+    #         "BAI": int(BAI),
+    #         "NMCM": int(rim_nmcm),
+    #         "NMCS": int(rim_nmcs),
+    #         "NMCB": int(rim_nmcb),
+    #         "NMC_flyable": int(rim_nmc_fly),
+    #         "Depot": int(rim_depot),
+    #         "UPNR": int(rim_upnr),
+    #         "Overhead_input": int(Overhead),
+    #     }
+
+    # --- Sidebar Inputs: Reliability / Attrition ---
+    # ASD = st.sidebar.number_input(
+    #     "Avg Sortie Duration (hrs)",
+    #     value=2.5,
+    #     step=0.1,
+    #     key="weekly_asd",
+    # )
+    # Break_pct = st.sidebar.slider(
+    #     "Break Rate (%)",
+    #     0.0, 100.0, 16.6,
+    #     key="weekly_break",
+    # )
+    # GA_pct = st.sidebar.slider(
+    #     "Ground Abort Rate (%)",
+    #     0.0, 100.0, 7.5,
+    #     key="weekly_ga",
+    # )
+    # Fix8 = st.sidebar.slider(
+    #     "Fix Rate 8 Hr (%)",
+    #     0.0, 100.0, 20.0,
+    #     key="weekly_fix8",
+    # )
+    # Fix12 = st.sidebar.slider(
+    #     "Fix Rate 12 Hr (%)",
+    #     0.0, 100.0, 30.0,
+    #     key="weekly_fix12",
+    # )
+    # Fix24 = st.sidebar.slider(
+    #     "Fix Rate 24 Hr (%)",
+    #     0.0, 100.0, 40.0,
+    #     key="weekly_fix24",
+    # )
+    # WxAttr = st.sidebar.slider(
+    #     "Weather Attrition (%)",
+    #     0.0, 100.0, 0.0,
+    #     key="weekly_wx",
+    # )
+    # SortieAttr = st.sidebar.slider(
+    #     "Sortie Attrition (%)",
+    #     0.0, 100.0,
+    #     20.0,
+    #     help="Percent of scheduled sorties lost to non-weather causes (not GA)."
+    # )
+
+    # Trials = st.sidebar.slider(
+    #     "MC Trials",
+    #     100, 2000, 500,
+    #     key="weekly_trials",
+    # )
+    # commit_thresh = st.sidebar.slider(
+    #     "Commitment Rate Threshold (%)",
+    #     min_value=0.0,
+    #     max_value=100.0,
+    #     value=65.0,
+    #     key="weekly_commit_thresh",
+    #     help="Warn when daily commit rate exceeds this % of available aircraft"
+    # )
 
     # --- Turn Pattern Input ---
     num_weeks = st.number_input(
@@ -430,449 +461,360 @@ if sim_choice == "Weekly Simulation":
         except Exception:
             pass
 
+        # # ============================
+        # # ⭐ RIM / NS Crew Requirement (Experimental)
+        # # ============================
+        # if enable_rim_ns:
+        #     from simulations.rim_requirements import compute_crew_aircraft_requirement
 
-        # --- Display Results & Charts ---
-        # st.subheader(f"📊 Weekly Results — Week {sel_w}")
+        #     st.subheader("RIM / North Star (Experimental) — Crew Requirement")
 
-        # col1, col2, col3, col4 = st.columns(4)
-
-        # # 1) Sorties Flown Distribution
-        # with col1:
-        #     flown = df["flown"]
-        #     fig1 = go.Figure()
-        #     fig1.add_trace(go.Histogram(x=flown, nbinsx=15, name="Flown"))
-        #     fig1.update_layout(
-        #         title="Sorties Flown Distribution",
-        #         xaxis_title="Sorties Flown",
-        #         yaxis_title="Frequency"
+        #     st.caption(
+        #         "This calculation is read-only and does not change the weekly sim. "
+        #         "It shows how many aircraft are required from a crew perspective, "
+        #         "given your current Turn Factor and a monthly crew requirement."
         #     )
-        #     st.plotly_chart(fig1, use_container_width=True, key="weekly_fig_flown_dist")
 
-        # # 2) Scheduled vs Avg Flown
-        # with col2:
-        #     fig2 = go.Figure()
-        #     fig2.add_trace(go.Scatter(x=days, y=avg_sched, mode="lines+markers", name="Scheduled"))
-        #     fig2.add_trace(go.Scatter(x=days, y=avg_flown, mode="lines+markers", name="Avg Flown"))
-        #     fig2.update_layout(
-        #         title="Scheduled vs Avg Flown",
-        #         xaxis_title="Day",
-        #         yaxis_title="Sorties"
+        #     # Inputs specific to RIM requirement
+        #     rim_col1, rim_col2, rim_col3 = st.columns(3)
+        #     with rim_col1:
+        #         crew_ratio = st.number_input(
+        #             "Crew Ratio (crews per aircraft)",
+        #             min_value=0.0,
+        #             value=1.2,
+        #             step=0.1,
+        #             key="rim_crew_ratio",
+        #             help="Example: 1.2 means 1.2 crews per PAI."
+        #         )
+        #     with rim_col2:
+        #         spcm = st.number_input(
+        #             "Sorties per Crew per Month (SPCM)",
+        #             min_value=0.0,
+        #             value=4.0,
+        #             step=0.5,
+        #             key="rim_spcm",
+        #             help="How many sorties each crew must fly per month."
+        #         )
+        #     with rim_col3:
+        #         om_days_rim = st.number_input(
+        #             "O&M Days in Planning Month (for RIM)",
+        #             min_value=1,
+        #             value=20,
+        #             step=1,
+        #             key="rim_om_days",
+        #             help="Use your monthly fly days here (not just this week)."
+        #         )
+
+        #     # Use your 'Sortie Attrition (%)' as the attrition input for now
+        #     attrition_rate_rim = SortieAttr / 100.0
+
+        #     # Crew-based requirement (RIM)
+        #     rim_req = compute_crew_aircraft_requirement(
+        #         pai=int(TAI),  # later we can refine PAI vs BAI/Overhead
+        #         crew_ratio=float(crew_ratio),
+        #         sorties_per_crew_month=float(spcm),
+        #         om_days=int(om_days_rim),
+        #         turn_factor=float(turn_factor),
+        #         attrition_rate=float(attrition_rate_rim),
         #     )
-        #     st.plotly_chart(fig2, use_container_width=True, key="weekly_fig_sched_vs_flown")
 
-        # with col3:
-        #     fig3 = go.Figure()
-        #     fig3.add_trace(go.Scatter(
-        #         x=days,
-        #         y=avg_end,
-        #         mode="lines",
-        #         name="End-of-Day Avail",
-        #         line=dict(width=2)
-        #     ))
-        #     fig3.add_trace(go.Scatter(
-        #         x=days,
-        #         y=avg_start,
-        #         mode="lines",
-        #         name="Start-of-Day Avail",
-        #         line=dict(width=2)
-        #     ))
-        #     fig3.add_trace(go.Scatter(
-        #         x=days + days[::-1],
-        #         y=list(avg_end) + list(avg_start[::-1]),
-        #         fill='toself',
-        #         fillcolor='rgba(0,100,200,0.2)',
-        #         line=dict(color='rgba(255,255,255,0)'),
-        #         showlegend=False
-        #     ))
-        #     fig3.update_layout(
-        #         title="Avg Daily Availability (Start → End)",
-        #         xaxis_title="Day of Week",
-        #         yaxis_title="Aircraft Available",
-        #         legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98)
+        #     st.markdown(
+        #         f"**Crew-based aircraft required:** **{rim_req['aircraft_required']}**  \n"
+        #         f"- Net sorties per month (crews): {rim_req['net_sorties_month']:.1f}  \n"
+        #         f"- Daily gross lines (after attrition): {rim_req['daily_gross_lines']:.1f}  \n"
+        #         f"- Turn Factor used: {rim_req['turn_factor']:.2f} sorties/jet/day  \n"
+        #         f"- Attrition used: {rim_req['attrition_rate']:.0%}"
         #     )
-        #     st.plotly_chart(fig3, use_container_width=True, key="weekly_fig_availability")
 
-        # # 4) Breaks vs Fix Completions
-        # with col4:
-        #     breaks_mean = df["breaks"].mean()
-        #     fixes_mean  = df["fix_completed"].mean()
-        #     breaks_std  = df["breaks"].std()
-        #     fixes_std   = df["fix_completed"].std()
+        #     # --- Compare crew-based requirement to simulated availability ---
+        #     st.subheader("RIM vs Simulated Weekly Capacity")
 
-        #     fig4 = go.Figure()
-        #     fig4.add_trace(go.Bar(
-        #         x=["Breaks","Fixes"],
-        #         y=[breaks_mean, fixes_mean],
-        #         error_y=dict(type="data", array=[breaks_std, fixes_std]),
-        #         marker_color=["salmon","skyblue"]
-        #     ))
-        #     fig4.update_layout(
-        #         title="Avg Breaks vs Fix Completions",
-        #         yaxis_title="Count"
-        #     )
-        #     st.plotly_chart(fig4, use_container_width=True, key="weekly_fig_breaks_vs_fixes")
+        #     try:
+        #         # avg_start / avg_end are already computed above for the selected week
+        #         avg_start_cap = float(np.mean(avg_start))   # start-of-day capacity
+        #         avg_end_cap   = float(np.mean(avg_end))     # end-of-day capacity
 
-        # # --- Compute Weekly Hours Flown ---
-        # df["hours_flown"] = df["flown"] * ASD
+        #         rim_ac = rim_req["aircraft_required"]
+        #         delta_start = avg_start_cap - rim_ac
+        #         delta_end   = avg_end_cap - rim_ac
 
-        # # --- Final Summary Table ---
-        # st.subheader("📋 Weekly Summary Statistics")
-        # st.dataframe(df.describe().transpose())
+        #         st.markdown(
+        #             f"""
+        #             **Average Start-of-Day Capacity:** {avg_start_cap:.1f} aircraft  
+        #             **Average End-of-Day Capacity:** {avg_end_cap:.1f} aircraft  
+        #             **Crew-Based Requirement (RIM):** {rim_ac} aircraft  
 
-        # ============================
-        # ⭐ RIM / NS Crew Requirement (Experimental)
-        # ============================
-        if enable_rim_ns:
-            from simulations.rim_requirements import compute_crew_aircraft_requirement
+        #             • Start-of-day margin: **{delta_start:+.1f}** aircraft  
+        #             • End-of-day margin: **{delta_end:+.1f}** aircraft  
+        #             """
+        #         )
 
-            st.subheader("RIM / North Star (Experimental) — Crew Requirement")
+        #         # --- Store a simple summary for future dashboards/modules ---
+        #         st.session_state["weekly_rim_summary"] = {
+        #             "turn_factor": float(turn_factor),
+        #             "crew_aircraft_required": int(rim_ac),
+        #             "avg_start_capacity": avg_start_cap,
+        #             "avg_end_capacity": avg_end_cap,
+        #             "tai": int(TAI),
+        #             "overhead": int(Overhead),
+        #             "sortie_attrition": float(SortieAttr / 100.0),
+        #         }
 
-            st.caption(
-                "This calculation is read-only and does not change the weekly sim. "
-                "It shows how many aircraft are required from a crew perspective, "
-                "given your current Turn Factor and a monthly crew requirement."
-            )
+        #         # Simple status indicator
+        #         if delta_start >= 0 and delta_end >= 0:
+        #             st.success("RIM requirement is within simulated capacity for this pattern.")
+        #         elif delta_start >= 0 and delta_end < 0:
+        #             st.warning("You start the day within RIM, but end-of-day capacity drops below requirement.")
+        #         else:
+        #             st.error("Simulated capacity is below RIM requirement for most of the day.")
 
-            # Inputs specific to RIM requirement
-            rim_col1, rim_col2, rim_col3 = st.columns(3)
-            with rim_col1:
-                crew_ratio = st.number_input(
-                    "Crew Ratio (crews per aircraft)",
-                    min_value=0.0,
-                    value=1.2,
-                    step=0.1,
-                    key="rim_crew_ratio",
-                    help="Example: 1.2 means 1.2 crews per PAI."
-                )
-            with rim_col2:
-                spcm = st.number_input(
-                    "Sorties per Crew per Month (SPCM)",
-                    min_value=0.0,
-                    value=4.0,
-                    step=0.5,
-                    key="rim_spcm",
-                    help="How many sorties each crew must fly per month."
-                )
-            with rim_col3:
-                om_days_rim = st.number_input(
-                    "O&M Days in Planning Month (for RIM)",
-                    min_value=1,
-                    value=20,
-                    step=1,
-                    key="rim_om_days",
-                    help="Use your monthly fly days here (not just this week)."
-                )
+        #         # ===============================
+        #         # ⭐ STEP 3: RIM 30-DAY PROJECTION
+        #         # ===============================
+        #         st.markdown("---")
+        #         st.subheader("📈 30-Day RIM Projection (Experimental)")
 
-            # Use your 'Sortie Attrition (%)' as the attrition input for now
-            attrition_rate_rim = SortieAttr / 100.0
+        #         degrade_1 = st.number_input(
+        #             "Known upcoming degraders in next 30 days",
+        #             min_value=0, value=0, step=1,
+        #             key="rim_deg_known",
+        #             help="E.g., scheduled phase, HSC, ISO, long-term NMCM, etc."
+        #         )
 
-            # Crew-based requirement (RIM)
-            rim_req = compute_crew_aircraft_requirement(
-                pai=int(TAI),  # later we can refine PAI vs BAI/Overhead
-                crew_ratio=float(crew_ratio),
-                sorties_per_crew_month=float(spcm),
-                om_days=int(om_days_rim),
-                turn_factor=float(turn_factor),
-                attrition_rate=float(attrition_rate_rim),
-            )
+        #         degrade_2 = st.number_input(
+        #             "Unscheduled/predictive degraders",
+        #             min_value=0, value=0, step=1,
+        #             key="rim_deg_unsched",
+        #             help="E.g., expected breaks from trend, cann requirements, supply delays."
+        #         )
 
-            st.markdown(
-                f"**Crew-based aircraft required:** **{rim_req['aircraft_required']}**  \n"
-                f"- Net sorties per month (crews): {rim_req['net_sorties_month']:.1f}  \n"
-                f"- Daily gross lines (after attrition): {rim_req['daily_gross_lines']:.1f}  \n"
-                f"- Turn Factor used: {rim_req['turn_factor']:.2f} sorties/jet/day  \n"
-                f"- Attrition used: {rim_req['attrition_rate']:.0%}"
-            )
+        #         total_new_degraders = degrade_1 + degrade_2
 
-            # --- Compare crew-based requirement to simulated availability ---
-            st.subheader("RIM vs Simulated Weekly Capacity")
+        #         projected_ep = max(avg_start_cap - total_new_degraders, 0)
+        #         projected_margin = projected_ep - rim_ac
 
-            try:
-                # avg_start / avg_end are already computed above for the selected week
-                avg_start_cap = float(np.mean(avg_start))   # start-of-day capacity
-                avg_end_cap   = float(np.mean(avg_end))     # end-of-day capacity
+        #         st.info(
+        #             f"**Projected EP in 30 days:** {projected_ep:.1f} aircraft  \n"
+        #             f"Degrader impact: –{total_new_degraders} aircraft  \n"
+        #             f"Projected RIM Margin: **{projected_margin:+.1f} aircraft**"
+        #         )
 
-                rim_ac = rim_req["aircraft_required"]
-                delta_start = avg_start_cap - rim_ac
-                delta_end   = avg_end_cap - rim_ac
+        #         if projected_margin >= 0:
+        #             st.success("Projection: You remain inside RIM requirement.")
+        #         else:
+        #             st.error(
+        #                 "Projection: You fall BELOW RIM requirement — risk of under-supporting the flying hour program."
+        #             )
 
-                st.markdown(
-                    f"""
-                    **Average Start-of-Day Capacity:** {avg_start_cap:.1f} aircraft  
-                    **Average End-of-Day Capacity:** {avg_end_cap:.1f} aircraft  
-                    **Crew-Based Requirement (RIM):** {rim_ac} aircraft  
+        #     except Exception as e:
+        #         # If sim hasn't run yet or arrays aren't available
+        #         st.warning(f"RIM comparison to availability not available: {e}")
 
-                    • Start-of-day margin: **{delta_start:+.1f}** aircraft  
-                    • End-of-day margin: **{delta_end:+.1f}** aircraft  
-                    """
-                )
+        # # ─────────────────────────────────────────────────────────────
+        # # RIM / North Star Projection (beta)
+        # # Uses weekly patterns + break/fix settings to project EP_home & RIM
+        # # ─────────────────────────────────────────────────────────────
+        # if enable_rim_ns:
+        #     with st.expander("📉 RIM / North Star Projection (beta)", expanded=False):
+        #         st.caption(
+        #             "Projects EP_home, NMC pool, and RIM over a short horizon using your "
+        #             "weekly pattern, break rate, and an approximate fix rate."
+        #         )
 
-                # --- Store a simple summary for future dashboards/modules ---
-                st.session_state["weekly_rim_summary"] = {
-                    "turn_factor": float(turn_factor),
-                    "crew_aircraft_required": int(rim_ac),
-                    "avg_start_capacity": avg_start_cap,
-                    "avg_end_capacity": avg_end_cap,
-                    "tai": int(TAI),
-                    "overhead": int(Overhead),
-                    "sortie_attrition": float(SortieAttr / 100.0),
-                }
+        #         # --- Structure inputs for RIM (PAI/BAI & non-possessed bins) ---
+        #         c1, c2, c3 = st.columns(3)
+        #         with c1:
+        #             rim_pai = st.number_input(
+        #                 "PAI (Primary Aircraft Inventory)",
+        #                 min_value=0,
+        #                 value=int(TAI),
+        #                 step=1,
+        #                 help="Core aircraft you intend to fly (RIM requirement basis)."
+        #             )
+        #         with c2:
+        #             rim_bai = st.number_input(
+        #                 "BAI (Backup Aircraft Inventory)",
+        #                 min_value=0,
+        #                 value=0,
+        #                 step=1,
+        #                 help="Backup aircraft that still count in TAI but are not primary flyers."
+        #             )
+        #         with c3:
+        #             rim_horizon = st.number_input(
+        #                 "RIM Horizon (days)",
+        #                 min_value=3,
+        #                 max_value=30,
+        #                 value=7,
+        #                 step=1,
+        #                 help="How many days ahead to project readiness."
+        #             )
 
-                # Simple status indicator
-                if delta_start >= 0 and delta_end >= 0:
-                    st.success("RIM requirement is within simulated capacity for this pattern.")
-                elif delta_start >= 0 and delta_end < 0:
-                    st.warning("You start the day within RIM, but end-of-day capacity drops below requirement.")
-                else:
-                    st.error("Simulated capacity is below RIM requirement for most of the day.")
+        #         st.markdown("**Overhead / Degraders breakout (optional, defaults from Overhead):**")
+        #         c4, c5, c6, c7 = st.columns(4)
+        #         with c4:
+        #             rim_nmcm = st.number_input(
+        #                 "NMCM",
+        #                 min_value=0,
+        #                 value=int(Overhead),
+        #                 step=1,
+        #                 help="Maintenance NMC aircraft."
+        #             )
+        #         with c5:
+        #             rim_nmcs = st.number_input("NMCS", min_value=0, value=0, step=1)
+        #         with c6:
+        #             rim_nmcb = st.number_input("NMCB", min_value=0, value=0, step=1)
+        #         with c7:
+        #             rim_nmc_fly = st.number_input(
+        #                 "NMC Flyable",
+        #                 min_value=0,
+        #                 value=0,
+        #                 step=1,
+        #                 help="Flyable but NMC (adds headroom, not EP)."
+        #             )
 
-                # ===============================
-                # ⭐ STEP 3: RIM 30-DAY PROJECTION
-                # ===============================
-                st.markdown("---")
-                st.subheader("📈 30-Day RIM Projection (Experimental)")
+        #         st.markdown("**Depot / UPNR / Deployed / Alert / Spares:**")
+        #         c8, c9, c10, c11, c12 = st.columns(5)
+        #         with c8:
+        #             rim_depot = st.number_input("Depot", min_value=0, value=0, step=1)
+        #         with c9:
+        #             rim_upnr = st.number_input("UPNR", min_value=0, value=0, step=1)
+        #         with c10:
+        #             rim_deployed = st.number_input(
+        #                 "Deployed",
+        #                 min_value=0,
+        #                 value=0,
+        #                 step=1,
+        #                 help="Aircraft away from home station."
+        #             )
+        #         with c11:
+        #             op_alert = st.number_input(
+        #                 "Alert Requirement",
+        #                 min_value=0,
+        #                 value=0,
+        #                 step=1,
+        #                 help="Alert tails that must be preserved first."
+        #             )
+        #         with c12:
+        #             rim_spares_bin = st.number_input(
+        #                 "Reserved Spares (bin)",
+        #                 min_value=0,
+        #                 value=0,
+        #                 step=1,
+        #                 help="Spares treated as committed in RIM."
+        #             )
 
-                degrade_1 = st.number_input(
-                    "Known upcoming degraders in next 30 days",
-                    min_value=0, value=0, step=1,
-                    key="rim_deg_known",
-                    help="E.g., scheduled phase, HSC, ISO, long-term NMCM, etc."
-                )
-
-                degrade_2 = st.number_input(
-                    "Unscheduled/predictive degraders",
-                    min_value=0, value=0, step=1,
-                    key="rim_deg_unsched",
-                    help="E.g., expected breaks from trend, cann requirements, supply delays."
-                )
-
-                total_new_degraders = degrade_1 + degrade_2
-
-                projected_ep = max(avg_start_cap - total_new_degraders, 0)
-                projected_margin = projected_ep - rim_ac
-
-                st.info(
-                    f"**Projected EP in 30 days:** {projected_ep:.1f} aircraft  \n"
-                    f"Degrader impact: –{total_new_degraders} aircraft  \n"
-                    f"Projected RIM Margin: **{projected_margin:+.1f} aircraft**"
-                )
-
-                if projected_margin >= 0:
-                    st.success("Projection: You remain inside RIM requirement.")
-                else:
-                    st.error(
-                        "Projection: You fall BELOW RIM requirement — risk of under-supporting the flying hour program."
-                    )
-
-            except Exception as e:
-                # If sim hasn't run yet or arrays aren't available
-                st.warning(f"RIM comparison to availability not available: {e}")
-
-        # ─────────────────────────────────────────────────────────────
-        # RIM / North Star Projection (beta)
-        # Uses weekly patterns + break/fix settings to project EP_home & RIM
-        # ─────────────────────────────────────────────────────────────
-        if enable_rim_ns:
-            with st.expander("📉 RIM / North Star Projection (beta)", expanded=False):
-                st.caption(
-                    "Projects EP_home, NMC pool, and RIM over a short horizon using your "
-                    "weekly pattern, break rate, and an approximate fix rate."
-                )
-
-                # --- Structure inputs for RIM (PAI/BAI & non-possessed bins) ---
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    rim_pai = st.number_input(
-                        "PAI (Primary Aircraft Inventory)",
-                        min_value=0,
-                        value=int(TAI),
-                        step=1,
-                        help="Core aircraft you intend to fly (RIM requirement basis)."
-                    )
-                with c2:
-                    rim_bai = st.number_input(
-                        "BAI (Backup Aircraft Inventory)",
-                        min_value=0,
-                        value=0,
-                        step=1,
-                        help="Backup aircraft that still count in TAI but are not primary flyers."
-                    )
-                with c3:
-                    rim_horizon = st.number_input(
-                        "RIM Horizon (days)",
-                        min_value=3,
-                        max_value=30,
-                        value=7,
-                        step=1,
-                        help="How many days ahead to project readiness."
-                    )
-
-                st.markdown("**Overhead / Degraders breakout (optional, defaults from Overhead):**")
-                c4, c5, c6, c7 = st.columns(4)
-                with c4:
-                    rim_nmcm = st.number_input(
-                        "NMCM",
-                        min_value=0,
-                        value=int(Overhead),
-                        step=1,
-                        help="Maintenance NMC aircraft."
-                    )
-                with c5:
-                    rim_nmcs = st.number_input("NMCS", min_value=0, value=0, step=1)
-                with c6:
-                    rim_nmcb = st.number_input("NMCB", min_value=0, value=0, step=1)
-                with c7:
-                    rim_nmc_fly = st.number_input(
-                        "NMC Flyable",
-                        min_value=0,
-                        value=0,
-                        step=1,
-                        help="Flyable but NMC (adds headroom, not EP)."
-                    )
-
-                st.markdown("**Depot / UPNR / Deployed / Alert / Spares:**")
-                c8, c9, c10, c11, c12 = st.columns(5)
-                with c8:
-                    rim_depot = st.number_input("Depot", min_value=0, value=0, step=1)
-                with c9:
-                    rim_upnr = st.number_input("UPNR", min_value=0, value=0, step=1)
-                with c10:
-                    rim_deployed = st.number_input(
-                        "Deployed",
-                        min_value=0,
-                        value=0,
-                        step=1,
-                        help="Aircraft away from home station."
-                    )
-                with c11:
-                    op_alert = st.number_input(
-                        "Alert Requirement",
-                        min_value=0,
-                        value=0,
-                        step=1,
-                        help="Alert tails that must be preserved first."
-                    )
-                with c12:
-                    rim_spares_bin = st.number_input(
-                        "Reserved Spares (bin)",
-                        min_value=0,
-                        value=0,
-                        step=1,
-                        help="Spares treated as committed in RIM."
-                    )
-
-                # --- Build daily training AM & sorties from your patterns ---
-                # First-go (AM) tails already parsed: first_go_vals (length 7)
+        #         # --- Build daily training AM & sorties from your patterns ---
+        #         # First-go (AM) tails already parsed: first_go_vals (length 7)
                 
-                # --- Recompute first-go values for RIM block ---
-                rim_patterns = all_weeks_patterns[sel_w-1]  # weekly pattern strings (Mon–Sun)
-                rim_go_lists = [list(map(int, re.findall(r"(\d+)", pat))) for pat in rim_patterns]
+        #         # --- Recompute first-go values for RIM block ---
+        #         rim_patterns = all_weeks_patterns[sel_w-1]  # weekly pattern strings (Mon–Sun)
+        #         rim_go_lists = [list(map(int, re.findall(r"(\d+)", pat))) for pat in rim_patterns]
 
-                first_go_vals = [gl[0] if len(gl) >= 1 else 0 for gl in rim_go_lists]
-                second_go_vals = [gl[1] if len(gl) >= 2 else 0 for gl in rim_go_lists]
+        #         first_go_vals = [gl[0] if len(gl) >= 1 else 0 for gl in rim_go_lists]
+        #         second_go_vals = [gl[1] if len(gl) >= 2 else 0 for gl in rim_go_lists]
 
-                # Daily first-go (AM) training lines
-                daily_training_am = [int(v) for v in first_go_vals]
+        #         # Daily first-go (AM) training lines
+        #         daily_training_am = [int(v) for v in first_go_vals]
 
-                # Use avg_flown as the daily sortie demand seen in the sim
-                daily_sorties = [int(round(v)) for v in avg_flown]
+        #         # Use avg_flown as the daily sortie demand seen in the sim
+        #         daily_sorties = [int(round(v)) for v in avg_flown]
 
-                # --- Translate your fix rates into an approximate daily fix fraction ---
-                # Simple approximation: average of 8/12/24-hr fix rates as a daily fraction
-                fix_rate_day = min(
-                    1.0,
-                    max(0.0, (Fix8 + Fix12 + Fix24) / 300.0)  # e.g. (25+35+56)/300 ≈ 0.39
-                )
+        #         # --- Translate your fix rates into an approximate daily fix fraction ---
+        #         # Simple approximation: average of 8/12/24-hr fix rates as a daily fraction
+        #         fix_rate_day = min(
+        #             1.0,
+        #             max(0.0, (Fix8 + Fix12 + Fix24) / 300.0)  # e.g. (25+35+56)/300 ≈ 0.39
+        #         )
 
-                rim_inputs = RIMProjectionInputs(
-                    tai=int(TAI),
-                    pai=int(rim_pai),
-                    bai=int(rim_bai),
-                    depot=int(rim_depot),
-                    upnr=int(rim_upnr),
-                    other_non_possessed=0,
-                    nmcm=int(rim_nmcm),
-                    nmcs=int(rim_nmcs),
-                    nmcb=int(rim_nmcb),
-                    nmc_flyable=int(rim_nmc_fly),
-                    deployed=int(rim_deployed),
-                    alert=int(op_alert),
-                    spares_bin=int(rim_spares_bin),
-                    horizon_days=int(rim_horizon),
-                    daily_training_am=daily_training_am,
-                    daily_sorties=daily_sorties,
-                    break_rate_per_sortie=float(Break_pct) / 100.0,
-                    fix_rate_per_day=fix_rate_day,
-                    commit_cap=commit_thresh / 100.0,
-                )
+        #         rim_inputs = RIMProjectionInputs(
+        #             tai=int(TAI),
+        #             pai=int(rim_pai),
+        #             bai=int(rim_bai),
+        #             depot=int(rim_depot),
+        #             upnr=int(rim_upnr),
+        #             other_non_possessed=0,
+        #             nmcm=int(rim_nmcm),
+        #             nmcs=int(rim_nmcs),
+        #             nmcb=int(rim_nmcb),
+        #             nmc_flyable=int(rim_nmc_fly),
+        #             deployed=int(rim_deployed),
+        #             alert=int(op_alert),
+        #             spares_bin=int(rim_spares_bin),
+        #             horizon_days=int(rim_horizon),
+        #             daily_training_am=daily_training_am,
+        #             daily_sorties=daily_sorties,
+        #             break_rate_per_sortie=float(Break_pct) / 100.0,
+        #             fix_rate_per_day=fix_rate_day,
+        #             commit_cap=commit_thresh / 100.0,
+        #         )
 
-                try:
-                    rim_results = project_rim_as_dicts(rim_inputs)
-                    rim_df = pd.DataFrame(rim_results)
+        #         try:
+        #             rim_results = project_rim_as_dicts(rim_inputs)
+        #             rim_df = pd.DataFrame(rim_results)
 
-                    st.markdown("**RIM Projection Table (per day)**")
-                    st.dataframe(
-                        rim_df[["day", "ep_home", "training_am", "alert", "spares_bin",
-                                "rim", "nmc_total", "breaks", "fixes"]],
-                        use_container_width=True
-                    )
+        #             st.markdown("**RIM Projection Table (per day)**")
+        #             st.dataframe(
+        #                 rim_df[["day", "ep_home", "training_am", "alert", "spares_bin",
+        #                         "rim", "nmc_total", "breaks", "fixes"]],
+        #                 use_container_width=True
+        #             )
 
-                    c_r1, c_r2 = st.columns(2)
+        #             c_r1, c_r2 = st.columns(2)
 
-                    # RIM vs Day
-                    with c_r1:
-                        fig_rim = go.Figure()
-                        fig_rim.add_trace(go.Scatter(
-                            x=rim_df["day"],
-                            y=rim_df["rim"],
-                            mode="lines+markers",
-                            name="RIM"
-                        ))
-                        fig_rim.update_layout(
-                            title="RIM vs Day",
-                            xaxis_title="Day",
-                            yaxis_title="RIM (EP_home − Requirement)"
-                        )
-                        st.plotly_chart(fig_rim, use_container_width=True)
+        #             # RIM vs Day
+        #             with c_r1:
+        #                 fig_rim = go.Figure()
+        #                 fig_rim.add_trace(go.Scatter(
+        #                     x=rim_df["day"],
+        #                     y=rim_df["rim"],
+        #                     mode="lines+markers",
+        #                     name="RIM"
+        #                 ))
+        #                 fig_rim.update_layout(
+        #                     title="RIM vs Day",
+        #                     xaxis_title="Day",
+        #                     yaxis_title="RIM (EP_home − Requirement)"
+        #                 )
+        #                 st.plotly_chart(fig_rim, use_container_width=True)
 
-                    # EP_home vs Requirement & NMC
-                    with c_r2:
-                        req_series = (
-                            rim_df["training_am"] + rim_df["alert"] + rim_df["spares_bin"]
-                        )
-                        fig_ep = go.Figure()
-                        fig_ep.add_trace(go.Scatter(
-                            x=rim_df["day"],
-                            y=rim_df["ep_home"],
-                            mode="lines+markers",
-                            name="EP_home"
-                        ))
-                        fig_ep.add_trace(go.Scatter(
-                            x=rim_df["day"],
-                            y=req_series,
-                            mode="lines+markers",
-                            name="Requirement (Alert+AM+Spares)"
-                        ))
-                        fig_ep.add_trace(go.Bar(
-                            x=rim_df["day"],
-                            y=rim_df["nmc_total"],
-                            name="NMC pool",
-                            opacity=0.4
-                        ))
-                        fig_ep.update_layout(
-                            title="EP_home, Requirement & NMC vs Day",
-                            xaxis_title="Day",
-                            yaxis_title="Tails"
-                        )
-                        st.plotly_chart(fig_ep, use_container_width=True)
+        #             # EP_home vs Requirement & NMC
+        #             with c_r2:
+        #                 req_series = (
+        #                     rim_df["training_am"] + rim_df["alert"] + rim_df["spares_bin"]
+        #                 )
+        #                 fig_ep = go.Figure()
+        #                 fig_ep.add_trace(go.Scatter(
+        #                     x=rim_df["day"],
+        #                     y=rim_df["ep_home"],
+        #                     mode="lines+markers",
+        #                     name="EP_home"
+        #                 ))
+        #                 fig_ep.add_trace(go.Scatter(
+        #                     x=rim_df["day"],
+        #                     y=req_series,
+        #                     mode="lines+markers",
+        #                     name="Requirement (Alert+AM+Spares)"
+        #                 ))
+        #                 fig_ep.add_trace(go.Bar(
+        #                     x=rim_df["day"],
+        #                     y=rim_df["nmc_total"],
+        #                     name="NMC pool",
+        #                     opacity=0.4
+        #                 ))
+        #                 fig_ep.update_layout(
+        #                     title="EP_home, Requirement & NMC vs Day",
+        #                     xaxis_title="Day",
+        #                     yaxis_title="Tails"
+        #                 )
+        #                 st.plotly_chart(fig_ep, use_container_width=True)
 
-                    st.caption(
-                        "RIM < 0 indicates a shortfall: not enough EP_home remaining after Alert, "
-                        "Training AM, and Reserved Spares. Adjust degraders, fix rates, or requirements "
-                        "to explore solutions."
-                    )
-                except Exception as e:
-                    st.error(f"RIM projection failed: {e}")
+        #             st.caption(
+        #                 "RIM < 0 indicates a shortfall: not enough EP_home remaining after Alert, "
+        #                 "Training AM, and Reserved Spares. Adjust degraders, fix rates, or requirements "
+        #                 "to explore solutions."
+        #             )
+        #         except Exception as e:
+        #             st.error(f"RIM projection failed: {e}")
 
         # --- Display Results & Charts ---
         st.subheader(f"📊 Weekly Results — Week {sel_w}")
