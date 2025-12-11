@@ -1605,7 +1605,7 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
     )
 
     # ==========================
-    # 2) Degraders & NMC Bins
+    # 2b) Degraders & NMC Bins
     # ==========================
     st.subheader("Degraders & NMC Bins")
 
@@ -2119,10 +2119,148 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
             """
         )
 
+    # ==========================
+    # 4) North Star – Reverse-Engineer Annual FHP
+    # ==========================
+    st.markdown("---")
+    st.subheader("🎯 North Star – Reverse Engineer Annual FHP Target")
 
+    ns_c1, ns_c2, ns_c3 = st.columns(3)
+    with ns_c1:
+        target_hours = st.number_input(
+            "Annual FHP Target (flying hours)",
+            min_value=0.0,
+            value=100000.0,
+            step=1000.0,
+            key="rim_target_hours",
+            help="Total flying hours you need to produce in the year."
+        )
+    with ns_c2:
+        asd_ns = st.number_input(
+            "Average Sortie Duration (hrs)",
+            min_value=0.1,
+            value=2.0,
+            step=0.1,
+            key="rim_target_asd",
+            help="Planned average sortie duration for the FHP."
+        )
+    with ns_c3:
+        om_days_ns = st.number_input(
+            "O&M Days per Year (North Star)",
+            min_value=1,
+            value=260,
+            step=1,
+            key="rim_target_om_days",
+            help="Training days per year (e.g., 5 days/week × 52 weeks ≈ 260)."
+        )
+
+    # Only compute if there is a non-zero target
+    if target_hours > 0 and asd_ns > 0 and om_days_ns > 0 and turn_factor > 0:
+        # 1) Total sorties required
+        total_sorties_req = target_hours / asd_ns
+
+        # 2) Daily sorties required
+        daily_sorties_req = total_sorties_req / om_days_ns
+
+        # 3) Daily gross sorties (undo attrition)
+        safe_attr = min(max(attr_rate, 0.0), 0.95)  # clamp 0–95% just for safety
+        daily_gross_sorties = daily_sorties_req / (1.0 - safe_attr)
+
+        # 4) Aircraft required (North Star)
+        ac_required_ns = math.ceil(daily_gross_sorties / turn_factor)
+
+        st.markdown("### North Star FHP Requirement Summary")
+
+        col_ns1, col_ns2 = st.columns(2)
+        with col_ns1:
+            st.markdown(
+                f"""
+                **Targets & Demand**  
+                • Target hours: **{target_hours:,.0f} hrs**  
+                • ASD: **{asd_ns:.2f} hr/sortie**  
+                • Total sorties required: **{total_sorties_req:,.0f}**  
+                • O&M days: **{om_days_ns} days**  
+                • Daily sortie requirement: **{daily_sorties_req:,.1f} /day**
+                """
+            )
+        with col_ns2:
+            margin_ns = avail_eff - ac_required_ns
+            st.markdown(
+                f"""
+                **Capacity & Aircraft Requirement**  
+                • Attrition (used): **{safe_attr*100:.0f}%**  
+                • Daily gross sorties (post-attrition): **{daily_gross_sorties:,.1f} /day**  
+                • Turn Factor (TF): **{turn_factor:.2f} sorties/jet/day**  
+                • **Aircraft required (North Star): {ac_required_ns} tails**  
+                • Avail FHP (+NMC Flyable): **{avail_eff} tails**  
+                • Margin vs availability: **{margin_ns:+.0f} tails**
+                """
+            )
+
+        # --- Math transparency: plain-language formulas + numbers ---
+        with st.expander("Show North Star math (how this was calculated)", expanded=False):
+            st.markdown(
+                f"""
+                **1. Total sorties required**
+
+                Formula:  
+                `Total sorties required = Target hours ÷ ASD`
+
+                With your inputs:  
+                `Total sorties required = {target_hours:,.0f} ÷ {asd_ns:.2f} = {total_sorties_req:,.1f}`
+
+
+                **2. Daily sorties required**
+
+                Formula:  
+                `Daily sorties required = Total sorties required ÷ O&M days`
+
+                With your inputs:  
+                `Daily sorties required = {total_sorties_req:,.1f} ÷ {om_days_ns} = {daily_sorties_req:,.2f}`
+
+
+                **3. Daily gross sorties (undo attrition)**
+
+                Formula:  
+                `Daily gross sorties = Daily sorties required ÷ (1 − attrition)`
+
+                With your inputs:  
+                `Daily gross sorties = {daily_sorties_req:,.2f} ÷ (1 − {safe_attr:.2f}) = {daily_gross_sorties:,.2f}`
+
+
+                **4. Aircraft required (North Star)**
+
+                Formula:  
+                `Aircraft required = ceil(Daily gross sorties ÷ Turn Factor)`
+
+                With your inputs:  
+                `Aircraft required = ceil({daily_gross_sorties:,.2f} ÷ {turn_factor:.2f}) = {ac_required_ns}`
+                """
+            )
+
+        # Optional: share in session_state for future modules/dashboard cards
+        st.session_state["northstar_fhp_summary"] = {
+            "target_hours": float(target_hours),
+            "asd": float(asd_ns),
+            "om_days": int(om_days_ns),
+            "attrition": float(safe_attr),
+            "turn_factor": float(turn_factor),
+            "total_sorties": float(total_sorties_req),
+            "daily_sorties": float(daily_sorties_req),
+            "daily_gross": float(daily_gross_sorties),
+            "ac_required_ns": int(ac_required_ns),
+            "avail_fhp": int(avail_eff),
+            "margin_vs_avail": float(margin_ns),
+        }
+
+    else:
+        st.info(
+            "Set a non-zero target hours, ASD, sensible O&M days, Turn Factor, and "
+            "commit cap to see the North Star reverse-engineering."
+        )
 
     # ==========================
-    # 4b) 30-Day RIM Projection (What-if)
+    # 5) 30-Day RIM Projection (What-if)
     # ==========================
     st.markdown("---")
     st.subheader("📈 30-Day RIM Projection (What-if Degraders)")
@@ -2161,3 +2299,4 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
         st.success("Projection: you remain inside RIM requirement under this degrader forecast.")
     else:
         st.error("Projection: under this degrader forecast, you will fall below RIM requirement.")
+
