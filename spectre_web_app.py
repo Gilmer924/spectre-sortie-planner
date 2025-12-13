@@ -81,6 +81,7 @@ st.sidebar.markdown(" Simulation Modules ")
 
 # ---------- Simulation Selector ----------
 sim_options = [
+    "SPECTRE Handbook",  # ELIF Placed under North Star Analysis
     "Weekly Simulation",
     "Personnel Simulation",
     "Quick Probability Analysis",
@@ -1810,3 +1811,310 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
     else:
         st.error("Projection: under this degrader forecast, you will fall below RIM requirement.")
 
+# ─── SPECTRE Introduction ───────────────────────────────────
+elif sim_choice == "SPECTRE Handbook":
+    st.header("📘 SPECTRE — How-To Guide")
+
+    st.markdown("""
+    **SPECTRE** helps you translate **fleet structure + maintenance reality + crew demand**
+    into **what you can actually schedule** (Weekly) and **what you must have to meet requirements** (RIM / North Star).
+    """)
+
+    with st.expander("1) What each mode does", expanded=True):
+        st.markdown("""
+        **Weekly Simulation**
+        - Simulates week-by-week flying execution using break/fix/attrition assumptions.
+        - Outputs distributions (risk), availability bands, and “can we execute this schedule?”
+
+        **RIM / North Star Analysis (beta)**
+        - Converts crew demand and FHP targets into aircraft required.
+        - Applies structure: Depot/UPNR, NMC bins, deployed, non-crew reservations (spares/trainers/alert/etc.).
+        - Produces margins and turn-pattern recommendations.
+        """)
+
+    with st.expander("2) 90-second workflow", expanded=True):
+        st.markdown("""
+        **Step A — Weekly (execution reality)**
+        1. Enter TAI + Overhead (or your normal EP drivers)
+        2. Set break rate + fix rates + ground abort + weather + sortie attrition
+        3. Build the week’s turn patterns (e.g., 10x8 M–Th, 8x0 Fri)
+        4. Run → review availability and risk
+
+        **Step B — RIM / North Star (requirement reality)**
+        1. Enter structure: TAI / PAI / Depot / UPNR
+        2. Enter operational requirements: spares, trainers, fleet mgmt, contingency, alert
+        3. Enter NMC bins and NMC-flyable headroom
+        4. Enter crews + SPCM, confirm Turn Factor (TF), set attrition
+        5. Read margins + pattern recommendations + reverse FHP math
+        """)
+
+    with st.expander("3) Key definitions (plain language)", expanded=False):
+        st.markdown("""
+        - **TAI**: Total Aircraft Inventory. Total Tails Assigned
+        - **PAI**: Primary Assigned Inventory. Tails resourced for crews/flying hours (your “programmed” fleet)
+        - **BAI**: Tails that preserve the program when Depot/UPNR hits (TAI − PAI)
+        - **Depot/UPNR**: non-possessed / not available to schedule
+        - **EP**: effective possessed after NMC bins (what’s truly available)
+        - **NMC Flyable**: coded NMC but can still be scheduled (headroom, not EP)
+        - **Turn Factor (TF)**: sorties per jet per fly day (how hard you’re turning)
+        - **Attrition**: sorties that won’t happen (weather/abort/cancel), driving extra scheduled lines
+        """)
+
+    with st.expander("4) Interpreting the output", expanded=False):
+        st.markdown("""
+        - **Crew requirement (executed)**: the sorties that must happen to satisfy crews/FHP
+        - **Scheduled lines (after attrition)**: what you must schedule to achieve that executed requirement
+        - **Margins**: how much aircraft capacity you have left (or how far short you are)
+        - **Recommendations**: what TF / commit rate / pattern shape is implied to close the gap
+        """)
+
+    with st.expander("📐 Formulas (North Star / RIM)", expanded=False):
+        st.markdown("""
+        ### Definitions (inputs)
+        - **PAI** = Primary Aircraft Inventory (tails resourced for crews/FHP)
+        - **CR** = Crew Ratio (crews per PAI)
+        - **SPCM** = Sorties per Crew per Month
+        - **OM** = O&M Days in Month (fly days)
+        - **TF** = Turn Factor (sorties per jet per fly day)
+        - **α** = Attrition rate (0–1). Example: 20% → α = 0.20  
+        - **Extra crews** = additional crew pools (CMR/BMC Wingmen/FL, etc.)
+        
+        ---
+        
+        ## 1) Crew-only North Star (base crews via crew ratio)
+        
+        **Step 1 — Base crews**
+        - **Crews_base = ceil(CR × PAI)**
+        
+        **Step 2 — Monthly executed sorties requirement**
+        - **S_exec_month = Crews_base × SPCM**
+        
+        **Step 3 — Daily executed requirement (what must actually happen)**
+        - **S_exec_day = ceil(S_exec_month ÷ OM)**
+        
+        **Step 4 — Daily scheduled lines required (undo attrition)**
+        - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**
+        
+        **Step 5 — Aircraft required for the schedule**
+        - **A_req = ceil(S_sched_day ÷ TF)**
+        
+        > Where TF, Attrition, and O&M sit:
+        > - **OM** divides monthly sorties into daily sorties  
+        > - **α** increases scheduled lines above executed requirement  
+        > - **TF** converts scheduled lines into aircraft required
+        
+        ---
+        
+        ## 2) Crew + Overhead (base crew ratio + extra pools)
+        
+        **Step 1 — Extra crews monthly sorties**
+        For each overhead pool *i*:
+        - **S_i = ceil(Crews_i × SPCM_i)**
+        
+        Then:
+        - **S_extra_month = Σ S_i**
+        
+        **Step 2 — Total executed monthly sorties**
+        - **S_exec_month = (Crews_base × SPCM) + S_extra_month**
+        
+        Then same as above:
+        - **S_exec_day = ceil(S_exec_month ÷ OM)**  
+        - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**  
+        - **A_req = ceil(S_sched_day ÷ TF)**
+        
+        ---
+        
+        ## 3) Overhead-only mode (ignore crew ratio, use overhead pools only)
+        
+        **Executed monthly sorties**
+        - **S_exec_month = Σ ceil(Crews_i × SPCM_i)**
+        
+        Then:
+        - **S_exec_day = ceil(S_exec_month ÷ OM)**  
+        - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**  
+        - **A_req = ceil(S_sched_day ÷ TF)**
+        
+        ---
+        
+        ## 4) Operational Requirements (non-crew) effects on availability (structure side)
+        
+        These are **reserved tails** (they reduce FHP availability, not crew demand):
+        - **Op_total = Spares + Trainers + FleetMgmt + Contingency + Alert**
+        - **Op_reserved = min(EP_home, Op_total)**
+        - **Avail_FHP = max(EP_home − Op_reserved, 0)**
+        - **Avail_eff = Avail_FHP + NMC_flyable**
+        
+        ---
+        
+        ## 5) Turn Pattern implication (2-Go baseline)
+        
+        Given TF and an AM go count:
+        - **PM_turns ≈ floor(AM × (TF − 1))**
+        - **Total sorties/day ≈ AM + PM**
+        
+        This is why raising TF can reduce AM demand but can increase PM burden.
+        
+        ---
+        """)
+        import math
+
+    # ---- Example Toggle -------------------------------------------------
+    show_example = st.checkbox("Show worked example (formulas + numbers)", value=False, key="howto_show_example")
+    
+    if show_example:
+        st.markdown("### Worked Example")
+    
+        # Pull current values if present; otherwise use defaults
+        # (These keys are from our RIM tab inputs; adjust if your keys differ.)
+        pai = int(st.session_state.get("rim_pai", st.session_state.get("rim_pai_beta", 16)))
+        cr = float(st.session_state.get("rim_crew_ratio_beta", 1.2))
+        spcm = float(st.session_state.get("rim_spcm_beta", 4.0))
+        om = int(st.session_state.get("rim_om_days_beta", 20))
+        tf = float(st.session_state.get("weekly_turn_factor", st.session_state.get("rim_tf_manual_beta", 1.5)))
+    
+        # Attrition slider is stored as percent in our UI; convert to 0..1
+        attr_pct = float(st.session_state.get("rim_attr_rate_beta", 20.0))
+        alpha = max(0.0, min(0.95, attr_pct / 100.0))
+    
+        # Optional overhead pools (if user already set them); otherwise example 0
+        # If you store overhead pools in a list, you can replace this with that logic.
+        # We'll try common keys we used for the Crew Overhead expander:
+        def get_int(key: str, default: int = 0) -> int:
+            try:
+                return int(st.session_state.get(key, default))
+            except Exception:
+                return default
+    
+        def get_float(key: str, default: float = 0.0) -> float:
+            try:
+                return float(st.session_state.get(key, default))
+            except Exception:
+                return default
+    
+        overhead_groups = [
+            ("CMR Wingmen",      get_int("rim_cmr_wg_count", 0), get_float("rim_cmr_wg_spcm", 0.0)),
+            ("CMR Flight Leads", get_int("rim_cmr_fl_count", 0), get_float("rim_cmr_fl_spcm", 0.0)),
+            ("BMC Wingmen",      get_int("rim_bmc_wg_count", 0), get_float("rim_bmc_wg_spcm", 0.0)),
+            ("BMC Flight Leads", get_int("rim_bmc_fl_count", 0), get_float("rim_bmc_fl_spcm", 0.0)),
+        ]
+    
+        # --- Crew-only math ---
+        crews_base = math.ceil(cr * pai)
+        s_exec_month = crews_base * spcm
+        s_exec_day = math.ceil(s_exec_month / max(1, om))
+        s_sched_day = math.ceil(s_exec_day / max(1e-6, (1.0 - alpha)))
+        a_req = math.ceil(s_sched_day / max(1e-6, tf))
+    
+        st.markdown(
+            f"""
+    **Inputs used**
+    - PAI = **{pai}**
+    - Crew Ratio (CR) = **{cr:.2f}**
+    - SPCM = **{spcm:.2f}**
+    - OM days = **{om}**
+    - TF = **{tf:.2f}**
+    - Attrition α = **{alpha:.0%}**
+    
+    ---
+    
+    ### A) Crew-only (base crews via ratio)
+    
+    **1) Base crews**
+    - Crews_base = ceil(CR × PAI)  
+    - Crews_base = ceil({cr:.2f} × {pai}) = ceil({cr*pai:.2f}) = **{crews_base}**
+    
+    **2) Monthly executed sorties**
+    - S_exec_month = Crews_base × SPCM  
+    - S_exec_month = {crews_base} × {spcm:.2f} = **{s_exec_month:.0f}**
+    
+    **3) Daily executed requirement**
+    - S_exec_day = ceil(S_exec_month ÷ OM)  
+    - S_exec_day = ceil({s_exec_month:.0f} ÷ {om}) = ceil({s_exec_month/om:.2f}) = **{s_exec_day}**
+    
+    **4) Daily scheduled lines required (undo attrition)**
+    - S_sched_day = ceil(S_exec_day ÷ (1 − α))  
+    - S_sched_day = ceil({s_exec_day} ÷ (1 − {alpha:.2f})) = ceil({s_exec_day/(1-alpha):.2f}) = **{s_sched_day}**
+    
+    **5) Aircraft required**
+    - A_req = ceil(S_sched_day ÷ TF)  
+    - A_req = ceil({s_sched_day} ÷ {tf:.2f}) = ceil({s_sched_day/tf:.2f}) = **{a_req}**
+    """
+        )
+    
+        # --- Crew + Overhead math ---
+        s_extra_month = 0
+        used_groups = []
+        for name, cnt, grp_spcm in overhead_groups:
+            if cnt > 0 and grp_spcm > 0:
+                s_i = math.ceil(cnt * grp_spcm)
+                s_extra_month += s_i
+                used_groups.append((name, cnt, grp_spcm, s_i))
+    
+        if used_groups:
+            s_exec_month_total = s_exec_month + s_extra_month
+            s_exec_day_total = math.ceil(s_exec_month_total / max(1, om))
+            s_sched_day_total = math.ceil(s_exec_day_total / max(1e-6, (1.0 - alpha)))
+            a_req_total = math.ceil(s_sched_day_total / max(1e-6, tf))
+    
+            lines = []
+            for (name, cnt, grp_spcm, s_i) in used_groups:
+                lines.append(f"- {name}: ceil({cnt} × {grp_spcm:.2f}) = **{s_i}** sorties/month")
+    
+            st.markdown(
+                f"""
+    ---
+    
+    ### B) Crew + Overhead (ratio crews + extra pools)
+    
+    **Overhead pools included**
+    {chr(10).join(lines)}
+    
+    **Extra monthly executed sorties**
+    - S_extra_month = Σ ceil(Crews_i × SPCM_i) = **{s_extra_month}**
+    
+    **Total executed monthly sorties**
+    - S_exec_month_total = S_exec_month + S_extra_month  
+    - = {s_exec_month:.0f} + {s_extra_month} = **{s_exec_month_total:.0f}**
+    
+    **Daily executed**
+    - S_exec_day_total = ceil({s_exec_month_total:.0f} ÷ {om}) = **{s_exec_day_total}**
+    
+    **Daily scheduled (after attrition)**
+    - S_sched_day_total = ceil({s_exec_day_total} ÷ (1 − {alpha:.2f})) = **{s_sched_day_total}**
+    
+    **Aircraft required**
+    - A_req_total = ceil({s_sched_day_total} ÷ {tf:.2f}) = **{a_req_total}**
+    """
+            )
+        else:
+            st.info("No overhead pools are currently set (>0 crews and >0 SPCM). Add values in Crew Overhead to see Crew+Overhead and Overhead-only examples.")
+    
+        # --- Overhead-only math (if overhead groups exist) ---
+        if used_groups:
+            s_exec_month_oh = s_extra_month
+            s_exec_day_oh = math.ceil(s_exec_month_oh / max(1, om))
+            s_sched_day_oh = math.ceil(s_exec_day_oh / max(1e-6, (1.0 - alpha)))
+            a_req_oh = math.ceil(s_sched_day_oh / max(1e-6, tf))
+    
+            st.markdown(
+                f"""
+    ---
+    
+    ### C) Overhead-only (ignore crew ratio; overhead pools only)
+    
+    **Executed monthly sorties**
+    - S_exec_month = **{s_exec_month_oh}**
+    
+    **Daily executed**
+    - S_exec_day = ceil({s_exec_month_oh} ÷ {om}) = **{s_exec_day_oh}**
+    
+    **Daily scheduled (after attrition)**
+    - S_sched_day = ceil({s_exec_day_oh} ÷ (1 − {alpha:.2f})) = **{s_sched_day_oh}**
+    
+    **Aircraft required**
+    - A_req = ceil({s_sched_day_oh} ÷ {tf:.2f}) = **{a_req_oh}**
+    """
+            )
+
+
+    st.info("Tip: Use Weekly to understand execution risk; use RIM/North Star to explain *why* you can’t meet everything at once.")
