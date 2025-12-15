@@ -81,7 +81,7 @@ st.sidebar.markdown(" Simulation Modules ")
 
 # ---------- Simulation Selector ----------
 sim_options = [
-    "SPECTRE Handbook",  # ELIF Placed under North Star Analysis
+    "SPECTRE Flight Manual",  # ELIF Placed under North Star Analysis
     "Weekly Simulation",
     "Personnel Simulation",
     "Quick Probability Analysis",
@@ -1224,17 +1224,22 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
             help="Use your monthly fly days (e.g., Mon–Fri x 4 weeks)."
         )
 
-    # --- Crew demand mode: ratio+overhead vs overhead-only ---
+    # --- Crew demand mode: ratio+overhead vs overhead-only vs Training (NS Trg) ---
     demand_mode = st.radio(
         "Crew demand mode",
-        ["Crew Ratio + Crew Overhead", "Crew Overhead Only"],
+        [
+            "Crew Ratio + Crew Overhead",
+            "Crew Overhead Only",
+            "NS Trg (Training Flight)",
+        ],
         key="rim_demand_mode_beta",
         help=(
             "• Crew Ratio + Crew Overhead: use PAI-based crew ratio and add overhead pools.\n"
-            "• Crew Overhead Only: ignore crew ratio and use only the CMR/BMC crew inputs below."
+            "• Crew Overhead Only: ignore crew ratio and use only the CMR/BMC crew inputs below.\n"
+            "• NS Trg: training production model using Student crews + IP sorties + refly rate."
         ),
     )
-
+    
     # --- Turn Factor selection ---
     st.markdown("**Turn Factor (TF) — sorties per jet per fly day**")
     tf_source = st.radio(
@@ -1242,7 +1247,7 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
         ["Use from Weekly Simulation (if available)", "Enter manually"],
         key="rim_tf_source_beta",
     )
-
+    
     tf_default = st.session_state.get("weekly_turn_factor", float("nan"))
     if tf_source == "Use from Weekly Simulation (if available)" and not math.isnan(tf_default):
         turn_factor = float(tf_default)
@@ -1256,7 +1261,8 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
             step=0.05,
             key="rim_tf_manual_beta",
         )
-
+    
+    # Attrition affects how many *scheduled* lines are needed to achieve the executed requirement
     attr_rate = st.slider(
         "Sortie attrition (for RIM calc) %",
         min_value=0.0,
@@ -1265,70 +1271,184 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
         step=1.0,
         key="rim_attr_rate_beta",
     ) / 100.0
-
-    # --- Crew Overhead (CMR/BMC mix) ---
-    extra_crews = []
-
-    with st.expander("Crew Overhead (CMR/BMC mix)", expanded=False):
-        st.caption(
-            "Use this to add specific crew pools with their own sortie requirements, "
-            "e.g. CMR/BMC Wingmen and Flight Leads."
+    
+    # ==========================
+    # NS Trg (Training Flight) inputs + compute (no crew ratio, no CMR/BMC overhead)
+    # ==========================
+    if demand_mode == "NS Trg (Training Flight)":
+        st.markdown("**NS Trg Inputs (Training Flight)**")
+    
+        tr_c1, tr_c2, tr_c3 = st.columns(3)
+        with tr_c1:
+            ns_trg_student_crews = st.number_input(
+                "Student crews (#)",
+                min_value=0,
+                value=0,
+                step=1,
+                key="ns_trg_student_crews",
+                help="Number of student crews being trained in the month.",
+            )
+        with tr_c2:
+            ns_trg_spcm_student = st.number_input(
+                "Sorties per student crew per month",
+                min_value=0.0,
+                value=0.0,
+                step=0.5,
+                key="ns_trg_spcm_student",
+                help="Monthly sortie requirement per student crew (effective/training credit).",
+            )
+        with tr_c3:
+            ns_trg_refly_rate = st.slider(
+                "Refly rate (%)",
+                min_value=0.0,
+                max_value=50.0,
+                value=10.5,
+                step=0.25,
+                key="ns_trg_refly_rate",
+                help="Fraction of sorties that must be re-flown; increases workload.",
+            ) / 100.0
+    
+        ns_trg_ip_sorties_month = st.number_input(
+            "Instructor Pilot sorties (monthly total)",
+            min_value=0.0,
+            value=0.0,
+            step=5.0,
+            key="ns_trg_ip_sorties_month",
+            help="Total IP sorties required in the month (workload, not per crew).",
         )
-
-        group_defs = [
-            ("CMR Wingmen", "cmr_wg"),
-            ("CMR Flight Leads", "cmr_fl"),
-            ("BMC Wingmen", "bmc_wg"),
-            ("BMC Flight Leads", "bmc_fl"),
-        ]
-
-        for label, key_suffix in group_defs:
-            c1, c2 = st.columns(2)
-            with c1:
-                count = st.number_input(
-                    f"{label} – # crews",
-                    min_value=0,
-                    value=0,
-                    step=1,
-                    key=f"rim_{key_suffix}_count",
-                )
-            with c2:
-                spcm_extra = st.number_input(
-                    f"{label} – sorties/crew/month",
-                    min_value=0.0,
-                    value=0.0,
-                    step=0.5,
-                    key=f"rim_{key_suffix}_spcm",
-                )
-
-            if count > 0 and spcm_extra > 0:
-                extra_crews.append(
-                    {
-                        "name": label,
-                        "count": float(int(count)),  # enforce whole crews
-                        "spcm": float(spcm_extra),
-                    }
-                )
-
-    # --- Build inputs for the requirement engine ---
-    if demand_mode == "Crew Overhead Only":
-        # Ignore crew ratio; requirement comes only from overhead pools
-        eff_crew_ratio = 0.0
-        eff_spcm = 0.0
+    
+        # -------------------------
+        # Training math
+        # -------------------------
+        # Effective student requirement (credit needed)
+        effective_student_month = float(ns_trg_student_crews) * float(ns_trg_spcm_student)
+    
+        # Refly increases workload: need to fly more sorties to achieve effective credit
+        # if refly=0.10 -> only 90% effective -> divide by 0.90
+        student_workload_month = effective_student_month / max(1e-6, (1.0 - float(ns_trg_refly_rate)))
+    
+        # Total executed workload/month = student workload + IP workload
+        executed_month = student_workload_month + float(ns_trg_ip_sorties_month)
+    
+        # Whole sorties
+        executed_month_i = int(math.ceil(executed_month))
+    
+        # Executed per day (whole sorties/day)
+        executed_day = executed_month_i / max(1, int(om_days))
+        executed_day_i = int(math.ceil(executed_day))
+    
+        # Scheduled lines/day needed after attrition (whole lines/day)
+        scheduled_lines = executed_day_i / max(1e-6, (1.0 - float(attr_rate)))
+        scheduled_lines_i = int(math.ceil(scheduled_lines))
+    
+        # Aircraft required given TF (whole aircraft)
+        tf_val = max(1e-6, float(turn_factor))
+        aircraft_required = int(math.ceil(scheduled_lines_i / tf_val))
+    
+        # Build a rim_req-like dict so downstream code keeps working
+        # IMPORTANT: In training mode, students are the "base crews" and extra crews = 0
+        rim_req = {
+            "pai": int(rim_pai),
+            "crew_ratio": 0.0,
+            "sorties_per_crew_month": 0.0,
+            "om_days": int(om_days),
+            "turn_factor": float(tf_val),
+            "attrition_rate": float(attr_rate),
+    
+            "base_crews": float(int(ns_trg_student_crews)),
+            "extra_crews_total": 0.0,
+            "total_crews": float(int(ns_trg_student_crews)),
+    
+            # Monthly
+            "base_net_sorties_month": float(effective_student_month),   # effective credit requirement
+            "extra_net_sorties_month": 0.0,
+            "net_sorties_month": float(executed_month_i),               # workload requirement (students+IP)
+    
+            # Daily
+            "daily_net_sorties": float(executed_day_i),                 # executed workload/day
+            "daily_gross_lines": float(scheduled_lines_i),              # scheduled lines/day after attrition
+    
+            "aircraft_required": aircraft_required,
+    
+            # Training audit fields
+            "ns_trg_student_crews": int(ns_trg_student_crews),
+            "ns_trg_spcm_student": float(ns_trg_spcm_student),
+            "ns_trg_refly_rate": float(ns_trg_refly_rate),
+            "ns_trg_ip_sorties_month": float(ns_trg_ip_sorties_month),
+            "ns_trg_effective_student_month": float(effective_student_month),
+            "ns_trg_student_workload_month": float(student_workload_month),
+        }
+    
+    # ==========================
+    # Operational modes (crew ratio / overhead pools)
+    # ==========================
     else:
-        eff_crew_ratio = float(crew_ratio)
-        eff_spcm = float(spcm)
+        # --- Crew Overhead (CMR/BMC mix) ---
+        extra_crews = []
+    
+        with st.expander("Crew Overhead (CMR/BMC mix)", expanded=False):
+            st.caption(
+                "Use this to add specific crew pools with their own sortie requirements, "
+                "e.g. CMR/BMC Wingmen and Flight Leads."
+            )
+    
+            group_defs = [
+                ("CMR Wingmen", "cmr_wg"),
+                ("CMR Flight Leads", "cmr_fl"),
+                ("BMC Wingmen", "bmc_wg"),
+                ("BMC Flight Leads", "bmc_fl"),
+            ]
+    
+            for label, key_suffix in group_defs:
+                c1, c2 = st.columns(2)
+                with c1:
+                    count = st.number_input(
+                        f"{label} – # crews",
+                        min_value=0,
+                        value=0,
+                        step=1,
+                        key=f"rim_{key_suffix}_count",
+                    )
+                with c2:
+                    spcm_extra = st.number_input(
+                        f"{label} – sorties/crew/month",
+                        min_value=0.0,
+                        value=0.0,
+                        step=0.5,
+                        key=f"rim_{key_suffix}_spcm",
+                    )
+    
+                if count > 0 and spcm_extra > 0:
+                    extra_crews.append(
+                        {
+                            "name": label,
+                            "count": float(int(count)),  # whole crews
+                            "spcm": float(spcm_extra),
+                        }
+                    )
+    
+        # --- Build inputs for the requirement engine ---
+        if demand_mode == "Crew Overhead Only":
+            eff_crew_ratio = 0.0
+            eff_spcm = 0.0
+        else:
+            eff_crew_ratio = float(crew_ratio)
+            eff_spcm = float(spcm)
+    
+        rim_req = compute_crew_aircraft_requirement(
+            pai=int(rim_pai),
+            crew_ratio=eff_crew_ratio,
+            sorties_per_crew_month=eff_spcm,
+            om_days=int(om_days),
+            turn_factor=float(turn_factor),
+            attrition_rate=float(attr_rate),
+            extra_crews=extra_crews,
+        )
+    
+    # Convenience values (prevents undefined errors downstream)
+    executed_day_i = int(math.ceil(float(rim_req.get("daily_net_sorties", 0.0))))
+    scheduled_day_i = int(math.ceil(float(rim_req.get("daily_gross_lines", 0.0))))
 
-    # Compute requirement
-    rim_req = compute_crew_aircraft_requirement(
-        pai=int(rim_pai),
-        crew_ratio=eff_crew_ratio,
-        sorties_per_crew_month=eff_spcm,
-        om_days=int(om_days),
-        turn_factor=float(turn_factor),
-        attrition_rate=float(attr_rate),
-        extra_crews=extra_crews,
-    )
 
     # --- Core RIM aircraft requirement (crew-only) ---
     rim_ac = int(rim_req["aircraft_required"])
@@ -1399,77 +1519,154 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
             """
         )
 
-    # --- Crew & Sortie Breakdown (flattened 4-panel layout) ---
+    # --- Crew & Sortie Breakdown (mode-aware) ---
     st.markdown("### Crew & Sortie Breakdown")
-
+    
     bc1, bc2, bc3, bc4 = st.columns(4)
-
-    # Safely pull extra fields (with defaults if your rim_requirements.py is older)
-    base_crews          = float(rim_req.get("base_crews",  crew_ratio * rim_pai))
-    extra_crews_total   = float(rim_req.get("extra_crews_total", 0.0))
-    total_crews         = float(rim_req.get("total_crews", base_crews + extra_crews_total))
-
-    base_month          = float(rim_req.get("base_net_sorties_month", 0.0))
-    extra_month         = float(rim_req.get("extra_net_sorties_month", 0.0))
-    total_month         = float(rim_req.get("net_sorties_month", base_month + extra_month))
-
-    daily_net           = float(rim_req.get("daily_net_sorties", total_month / max(1, om_days)))
-    daily_gross         = float(rim_req.get("daily_gross_lines", daily_net / max(1e-6, 1 - attr_rate)))
-
-    tf_val              = float(rim_req.get("turn_factor", turn_factor))
-    attr_val            = float(rim_req.get("attrition_rate", attr_rate))
-    om_days_val         = int(rim_req.get("om_days", om_days))
-
-    # Enforce whole numbers for crews and sorties (no fractional crews/sorties)
-    base_crews_i        = math.ceil(base_crews)
-    extra_crews_i       = math.ceil(extra_crews_total)
-    total_crews_i       = math.ceil(total_crews)
-
-    daily_net_i         = math.ceil(daily_net)
-    daily_gross_i       = math.ceil(daily_gross)
-    total_month_i       = math.ceil(total_month)
-
-    with bc1:
-        st.markdown(
-            f"""
-            **Crews**  
-            • Base crews (ratio × PAI): {base_crews_i}  
-            • Extra crews (overhead pools): {extra_crews_i}  
-            • **Total crews:** {total_crews_i}
-            """
+    
+    # Pull common values (work for both modes)
+    tf_val      = float(rim_req.get("turn_factor", turn_factor))
+    attr_val    = float(rim_req.get("attrition_rate", attr_rate))
+    om_days_val = int(rim_req.get("om_days", om_days))
+    
+    # Daily executed + daily scheduled (whole numbers)
+    executed_day_i  = int(math.ceil(float(rim_req.get("daily_net_sorties", 0.0))))
+    scheduled_day_i = int(math.ceil(float(rim_req.get("daily_gross_lines", 0.0))))
+    
+    # Monthly totals inferred from daily (whole numbers, consistent)
+    executed_month_i  = int(math.ceil(executed_day_i * max(1, om_days_val)))
+    scheduled_month_i = int(math.ceil(scheduled_day_i * max(1, om_days_val)))
+    
+    is_training = (demand_mode == "NS Trg (Training Flight)")
+    
+    if is_training:
+        # ---- Training-specific fields ----
+        student_crews = int(rim_req.get("ns_trg_student_crews", 0))
+        spcm_student  = float(rim_req.get("ns_trg_spcm_student", 0.0))
+        refly_rate    = float(rim_req.get("ns_trg_refly_rate", 0.0))
+        ip_month      = float(rim_req.get("ns_trg_ip_sorties_month", 0.0))
+    
+        # Effective training requirement (progress credit) and workload after refly
+        effective_need_month = student_crews * spcm_student
+        workload_student_month = (
+            effective_need_month / max(1e-6, (1.0 - refly_rate))
+            if effective_need_month > 0 else 0.0
         )
+    
+        # Total executed workload (students workload + IP)
+        executed_month_calc = workload_student_month + ip_month
+    
+        # Whole-number display
+        effective_need_month_i    = int(math.ceil(effective_need_month))
+        workload_student_month_i  = int(math.ceil(workload_student_month))
+        ip_month_i                = int(math.ceil(ip_month))
+        executed_month_calc_i     = int(math.ceil(executed_month_calc))
+    
+        with bc1:
+            st.markdown(
+                f"""
+                **Crews (Training)**  
+                • **Student crews:** {student_crews}  
+                • Base crews (ratio × PAI): 0  
+                • Overhead pools: 0  
+                """
+            )
+    
+        with bc2:
+            st.markdown(
+                f"""
+                **Sorties – Monthly (Training)**  
+                • Effective student requirement: **{effective_need_month_i}**  
+                • Student workload (after refly): **{workload_student_month_i}**  
+                • IP sorties (monthly): **{ip_month_i}**  
+                • **Total executed workload:** **{executed_month_calc_i}**  
+                """
+            )
+    
+        with bc3:
+            st.markdown(
+                f"""
+                **Sorties – Daily (Training)**  
+                • **Executed workload/day:** **{executed_day_i}**  
+                • **Scheduled lines/day (after attrition):** **{scheduled_day_i}**  
+                """
+            )
+    
+        with bc4:
+            st.markdown(
+                f"""
+                **Assumptions (Training)**  
+                • Turn Factor (TF): {tf_val:.2f} sorties/jet/day  
+                • Attrition used: {attr_val:.0%}  
+                • Refly rate: {refly_rate:.0%}  
+                • O&M days in month: {om_days_val}  
+    
+                _Refly increases workload: workload = effective ÷ (1 − refly)._  
+                _Attrition increases scheduled lines: scheduled = executed ÷ (1 − attrition)._  
+                """
+            )
+    
+    else:
+        # ---- Operational (existing logic) ----
+        base_crews        = float(rim_req.get("base_crews",  crew_ratio * rim_pai))
+        extra_crews_total = float(rim_req.get("extra_crews_total", 0.0))
+        total_crews       = float(rim_req.get("total_crews", base_crews + extra_crews_total))
+    
+        base_month  = float(rim_req.get("base_net_sorties_month", 0.0))
+        extra_month = float(rim_req.get("extra_net_sorties_month", 0.0))
+        total_month = float(rim_req.get("net_sorties_month", base_month + extra_month))
+    
+        # Whole numbers
+        base_crews_i  = int(math.ceil(base_crews))
+        extra_crews_i = int(math.ceil(extra_crews_total))
+        total_crews_i = int(math.ceil(total_crews))
+    
+        base_month_i  = int(math.ceil(base_month))
+        extra_month_i = int(math.ceil(extra_month))
+        total_month_i = int(math.ceil(total_month))
+    
+        with bc1:
+            st.markdown(
+                f"""
+                **Crews (Operational)**  
+                • Base crews (ratio × PAI): {base_crews_i}  
+                • Extra crews (overhead pools): {extra_crews_i}  
+                • **Total crews:** {total_crews_i}
+                """
+            )
+    
+        with bc2:
+            st.markdown(
+                f"""
+                **Sorties – Monthly (Operational)**  
+                • Base crews: {base_month_i}  
+                • Extra crews: {extra_month_i}  
+                • **Total (executed requirement):** {total_month_i}
+                """
+            )
+    
+        with bc3:
+            st.markdown(
+                f"""
+                **Sorties – Daily (Operational)**  
+                • **Executed requirement/day:** {executed_day_i}  
+                • **Scheduled lines/day (after attrition):** {scheduled_day_i}  
+                """
+            )
+    
+        with bc4:
+            st.markdown(
+                f"""
+                **Assumptions (Operational)**  
+                • Turn Factor (TF): {tf_val:.2f} sorties/jet/day  
+                • Attrition used: {attr_val:.0%}  
+                • O&M days in month: {om_days_val}  
+    
+                _Executed requirement is driven by crews (ratio/SPCM + overhead pools)._  
+                _Attrition increases the **scheduled lines** needed to achieve that executed requirement._  
+                """
+            )
 
-    with bc2:
-        st.markdown(
-            f"""
-            **Sorties – Monthly**  
-            • Base crews: {math.ceil(base_month)}  
-            • Extra crews: {math.ceil(extra_month)}  
-            • **Total (executed requirement):** {total_month_i}
-            """
-        )
-
-    with bc3:
-        st.markdown(
-            f"""
-            **Sorties – Daily**  
-            • **Crew requirement (executed):** {daily_net_i} sorties/day  
-            • **Scheduled lines (after attrition):** {daily_gross_i} lines/day  
-            """
-        )
-
-    with bc4:
-        st.markdown(
-            f"""
-            **Assumptions**  
-            • Turn Factor (TF): {tf_val:.2f} sorties/jet/day  
-            • Attrition used: {attr_val:.0%}  
-            • O&M days in month: {om_days_val}  
-
-            _Crew requirement (executed) is fixed by crew ratio and SPCM._  
-            _Attrition increases the **scheduled lines** needed to achieve that requirement._
-            """
-        )
 
     # --- Overall status based on total requirement ---
     if margin_total_req >= 0:
@@ -1812,7 +2009,7 @@ elif sim_choice == "RIM / North Star Analysis (beta)":
         st.error("Projection: under this degrader forecast, you will fall below RIM requirement.")
 
 # ─── SPECTRE Introduction ───────────────────────────────────
-elif sim_choice == "SPECTRE Handbook":
+elif sim_choice == "SPECTRE Flight Manual":
     st.header("📘 SPECTRE — How-To Guide")
 
     st.markdown("""
@@ -1820,7 +2017,7 @@ elif sim_choice == "SPECTRE Handbook":
     into **what you can actually schedule** (Weekly) and **what you must have to meet requirements** (RIM / North Star).
     """)
 
-    with st.expander("1) What each mode does", expanded=True):
+    with st.expander("1) What each mode does", expanded=False):
         st.markdown("""
         **Weekly Simulation**
         - Simulates week-by-week flying execution using break/fix/attrition assumptions.
@@ -1832,7 +2029,7 @@ elif sim_choice == "SPECTRE Handbook":
         - Produces margins and turn-pattern recommendations.
         """)
 
-    with st.expander("2) 90-second workflow", expanded=True):
+    with st.expander("2) 90-second workflow", expanded=False):
         st.markdown("""
         **Step A — Weekly (execution reality)**
         1. Enter TAI + Overhead (or your normal EP drivers)
@@ -1869,6 +2066,9 @@ elif sim_choice == "SPECTRE Handbook":
         """)
 
     with st.expander("📐 Formulas (North Star / RIM)", expanded=False):
+    
+        show_example = st.toggle("Show example (numbers applied)", value=False, key="ns_formula_example")
+    
         st.markdown("""
         ### Definitions (inputs)
         - **PAI** = Primary Aircraft Inventory (tails resourced for crews/FHP)
@@ -1876,87 +2076,135 @@ elif sim_choice == "SPECTRE Handbook":
         - **SPCM** = Sorties per Crew per Month
         - **OM** = O&M Days in Month (fly days)
         - **TF** = Turn Factor (sorties per jet per fly day)
-        - **α** = Attrition rate (0–1). Example: 20% → α = 0.20  
+        - **α** = Attrition rate (0–1). Example: 20% → α = 0.20
         - **Extra crews** = additional crew pools (CMR/BMC Wingmen/FL, etc.)
-        
+    
+        **Training (NS Trg) additions**
+        - **Student crews** = number of student crews in training
+        - **SPCM_student** = sorties per student crew per month
+        - **Refly** = fraction of student sorties that must be repeated (0–1)
+        - **IP sorties** = instructor pilot sorties required per month (monthly total)
+    
         ---
-        
+    
         ## 1) Crew-only North Star (base crews via crew ratio)
-        
+    
         **Step 1 — Base crews**
         - **Crews_base = ceil(CR × PAI)**
-        
+    
         **Step 2 — Monthly executed sorties requirement**
         - **S_exec_month = Crews_base × SPCM**
-        
+    
         **Step 3 — Daily executed requirement (what must actually happen)**
         - **S_exec_day = ceil(S_exec_month ÷ OM)**
-        
+    
         **Step 4 — Daily scheduled lines required (undo attrition)**
         - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**
-        
+    
         **Step 5 — Aircraft required for the schedule**
         - **A_req = ceil(S_sched_day ÷ TF)**
-        
+    
         > Where TF, Attrition, and O&M sit:
-        > - **OM** divides monthly sorties into daily sorties  
-        > - **α** increases scheduled lines above executed requirement  
+        > - **OM** divides monthly sorties into daily sorties
+        > - **α** increases scheduled lines above executed requirement
         > - **TF** converts scheduled lines into aircraft required
-        
+    
         ---
-        
+    
         ## 2) Crew + Overhead (base crew ratio + extra pools)
-        
+    
         **Step 1 — Extra crews monthly sorties**
         For each overhead pool *i*:
         - **S_i = ceil(Crews_i × SPCM_i)**
-        
+    
         Then:
         - **S_extra_month = Σ S_i**
-        
+    
         **Step 2 — Total executed monthly sorties**
         - **S_exec_month = (Crews_base × SPCM) + S_extra_month**
-        
+    
         Then same as above:
-        - **S_exec_day = ceil(S_exec_month ÷ OM)**  
-        - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**  
+        - **S_exec_day = ceil(S_exec_month ÷ OM)**
+        - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**
         - **A_req = ceil(S_sched_day ÷ TF)**
-        
+    
         ---
-        
+    
         ## 3) Overhead-only mode (ignore crew ratio, use overhead pools only)
-        
+    
         **Executed monthly sorties**
         - **S_exec_month = Σ ceil(Crews_i × SPCM_i)**
-        
+    
         Then:
-        - **S_exec_day = ceil(S_exec_month ÷ OM)**  
-        - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**  
+        - **S_exec_day = ceil(S_exec_month ÷ OM)**
+        - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**
         - **A_req = ceil(S_sched_day ÷ TF)**
-        
+    
         ---
-        
-        ## 4) Operational Requirements (non-crew) effects on availability (structure side)
-        
+    
+        ## 4) NS Trg (Training Flight) — student production + IP sorties + refly
+    
+        **Step 1 — Student effective requirement (monthly)**
+        - **S_student_effective = Student_crews × SPCM_student**
+    
+        **Step 2 — Refly inflates workload (monthly)**
+        - **S_student_gross = S_student_effective ÷ (1 − Refly)**
+    
+        **Step 3 — Add instructor workload**
+        - **S_exec_month = S_student_gross + IP_sorties_month**
+    
+        Then same daily/attrition/TF pipeline:
+        - **S_exec_day = ceil(S_exec_month ÷ OM)**
+        - **S_sched_day = ceil(S_exec_day ÷ (1 − α))**
+        - **A_req = ceil(S_sched_day ÷ TF)**
+    
+        Notes:
+        - **Refly is not attrition.** Refly creates additional workload to achieve the *effective* training requirement.
+        - **Attrition** still inflates scheduled lines above executed requirement.
+    
+        ---
+    
+        ## 5) Operational Requirements (non-crew) effects on availability (structure side)
+    
         These are **reserved tails** (they reduce FHP availability, not crew demand):
         - **Op_total = Spares + Trainers + FleetMgmt + Contingency + Alert**
         - **Op_reserved = min(EP_home, Op_total)**
         - **Avail_FHP = max(EP_home − Op_reserved, 0)**
         - **Avail_eff = Avail_FHP + NMC_flyable**
-        
+    
         ---
-        
-        ## 5) Turn Pattern implication (2-Go baseline)
-        
+    
+        ## 6) Turn Pattern implication (2-Go baseline)
+    
         Given TF and an AM go count:
         - **PM_turns ≈ floor(AM × (TF − 1))**
         - **Total sorties/day ≈ AM + PM**
-        
+    
         This is why raising TF can reduce AM demand but can increase PM burden.
-        
+    
         ---
         """)
-        import math
+
+    if show_example:
+        st.markdown("""
+        ### Example (numbers applied)
+
+        **Operational (Crew-only)**
+        - PAI=16, CR=1.2 ⇒ Crews_base=ceil(1.2×16)=ceil(19.2)=20  
+        - SPCM=4 ⇒ S_exec_month=20×4=80  
+        - OM=20 ⇒ S_exec_day=ceil(80/20)=4  
+        - α=0.20 ⇒ S_sched_day=ceil(4/0.8)=ceil(5)=5  
+        - TF=1.5 ⇒ A_req=ceil(5/1.5)=ceil(3.33)=4  
+
+        **Training (NS Trg)**
+        - Student_crews=12, SPCM_student=6 ⇒ S_student_effective=72  
+        - Refly=10% ⇒ S_student_gross=72/0.9=80  
+        - IP_sorties_month=20 ⇒ S_exec_month=100  
+        - OM=20 ⇒ S_exec_day=ceil(100/20)=5  
+        - α=0.20 ⇒ S_sched_day=ceil(5/0.8)=ceil(6.25)=7  
+        - TF=1.5 ⇒ A_req=ceil(7/1.5)=ceil(4.67)=5
+        """)
+
 
     # ---- Example Toggle -------------------------------------------------
     show_example = st.checkbox("Show worked example (formulas + numbers)", value=False, key="howto_show_example")
