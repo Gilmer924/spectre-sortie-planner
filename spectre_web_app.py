@@ -827,18 +827,63 @@ elif sim_choice == "Annual Historical Simulation":
 
         # --- 7) Show Alerts for Over-commitment ---
         with st.expander("⚠️ Alerts & Warnings", expanded=False):
-            for idx, m in enumerate(months):
-                r = rates_df_adj[rates_df_adj["month_num"]==m].iloc[0]
-                flyable_ac = max(0, math.floor(TAI - degraders[m]) * r["mc_rate"])
-                first_go = int(turn_patterns[m].split("x")[0])
+            st.caption(
+                "Flyable supply here is computed using **AA rate** (mc_hours / TAI_hours). "
+                "MC rate is shown for context (mc_hours / possessed_hours)."
+            )
+        
+            for m in months:
+                r = rates_df_adj[rates_df_adj["month_num"] == m].iloc[0]
+        
+                tai_after_degraders = max(0, int(TAI) - int(degraders[m]))
+        
+                # Prefer AA-rate for supply (new standard). Fallback to MC-rate if AA missing.
+                aa_rate = float(r.get("aa_rate", np.nan))
+                mc_rate = float(r.get("mc_rate", np.nan))
+        
+                if not np.isfinite(aa_rate):
+                    aa_rate_used = float(mc_rate) if np.isfinite(mc_rate) else 0.0
+                    aa_note = "AA missing → using MC rate as fallback"
+                else:
+                    aa_rate_used = aa_rate
+                    aa_note = None
+        
+                # Flyable tails (AA-driven)
+                flyable_ac = max(0, math.floor(tai_after_degraders * aa_rate_used))
+        
+                first_go = int(str(turn_patterns[m]).split("x")[0]) if turn_patterns[m] else 0
+        
+                # Commit risk
                 if flyable_ac > 0:
-                    commit_pct = first_go / flyable_ac * 100
+                    commit_pct = first_go / flyable_ac * 100.0
+        
+                    # Debug line so users can “see the math”
+                    st.write(
+                        f"**{calendar.month_abbr[m]}** — "
+                        f"TAI {int(TAI)} − Degraders {int(degraders[m])} = **{tai_after_degraders}** | "
+                        f"AA {aa_rate_used:.2%}"
+                        + (f" (MC {mc_rate:.2%})" if np.isfinite(mc_rate) else "")
+                        + f" → Flyable ≈ **{flyable_ac}** | First-go **{first_go}** | Commit **{commit_pct:.1f}%**"
+                    )
+        
+                    if aa_note:
+                        st.caption(f"🛈 {aa_note}")
+        
                     if commit_pct > 80:
-                        st.warning(f"{calendar.month_abbr[m]}: Over-committed! "
-                                   f"{first_go} committed / {flyable_ac:.1f} flyable ({commit_pct:.1f}%)")
+                        st.warning(
+                            f"{calendar.month_abbr[m]}: Over-committed! "
+                            f"{first_go} committed / {flyable_ac} flyable ({commit_pct:.1f}%)"
+                        )
                     else:
                         st.info(f"{calendar.month_abbr[m]}: Commit rate {commit_pct:.1f}% (OK)")
                 else:
+                    st.write(
+                        f"**{calendar.month_abbr[m]}** — "
+                        f"TAI after degraders = **{tai_after_degraders}**, "
+                        f"AA used = **{aa_rate_used:.2%}** → Flyable = **0**"
+                    )
+                    if aa_note:
+                        st.caption(f"🛈 {aa_note}")
                     st.error(f"{calendar.month_abbr[m]}: No flyable AC available!")
 
         # --- 7b) Probability of Meeting Flying Hour Goal ---

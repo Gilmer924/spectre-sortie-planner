@@ -7,6 +7,7 @@ Created on Tue Jun 24 08:59:18 2025
 # simulations/historical_annual.py
 
 import numpy as np
+import pandas as pd
 import math
 import calendar
 from simulations.simulation_base import SimulationBase
@@ -70,11 +71,19 @@ class HistoricalAnnualSimulation(SimulationBase):
                 else:
                     r = month_rows.iloc[0]
 
-                # --- Add random “noise” to MC and Execution rate for uncertainty ---
+                # --- Add random “noise” to MC/AA and Execution rate for uncertainty ---
                 mc_rate = np.clip(np.random.normal(r["mc_rate"], uncertainty), 0, 1)
+                
+                # Prefer AA-rate as the supply driver; fall back to MC-rate for legacy files
+                base_aa = r["aa_rate"] if "aa_rate" in r and pd.notna(r["aa_rate"]) else r["mc_rate"]
+                aa_rate = np.clip(np.random.normal(base_aa, uncertainty), 0, 1)
+                
                 exe_rate = np.clip(np.random.normal(r["execution_rate"], uncertainty), 0, 1)
+                
+                # Flyable supply for scheduling is AA-driven (assigned-based availability),
+                # degraders still subtract from TAI as planned losses.
+                flyable_ac = max(0, math.floor((TAI - degraders[m]) * aa_rate))
 
-                flyable_ac = max(0, math.floor(TAI - degraders[m]) * mc_rate)
                 days = om_days[m]
                 pattern = turn_patterns[m].split("x")
                 first_go = int(pattern[0])
@@ -91,6 +100,7 @@ class HistoricalAnnualSimulation(SimulationBase):
                     "scheduled": int(scheduled),
                     "flown": int(flown),
                     "mc_rate": mc_rate,
+                    "aa_rate": aa_rate,
                     "execution_rate": exe_rate,
                     "attrition_rate": r.get("attrition_rate", 0),
                     "break_rate": r.get("break_rate", 0),
@@ -113,6 +123,7 @@ class HistoricalAnnualSimulation(SimulationBase):
             sched = np.array([trial[idx]["scheduled"] for trial in trial_results])
             flown = np.array([trial[idx]["flown"] for trial in trial_results])
             mc_r  = np.array([trial[idx]["mc_rate"] for trial in trial_results])
+            aa_r  = np.array([trial[idx].get("aa_rate", trial[idx]["mc_rate"]) for trial in trial_results])
             exe_r = np.array([trial[idx]["execution_rate"] for trial in trial_results])
             avg_flyable = np.array([trial[idx]["flyable_ac"] for trial in trial_results])
             overcommit = np.array([trial[idx]["commit_pct"] > commit_thresh for trial in trial_results])
@@ -130,6 +141,7 @@ class HistoricalAnnualSimulation(SimulationBase):
                 "flown_ci_lo": float(np.percentile(flown, 2.5)),
                 "flown_ci_hi": float(np.percentile(flown, 97.5)),
                 "mc_rate_mean": float(np.mean(mc_r)),
+                "aa_rate_mean": float(np.mean(aa_r)),
                 "execution_rate_mean": float(np.mean(exe_r)),
                 "avg_flyable": float(np.mean(avg_flyable)),
                 "overcommit_risk": float(np.mean(overcommit)*100),
