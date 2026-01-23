@@ -709,7 +709,7 @@ elif sim_choice == "Annual Historical Simulation":
     uploaded = st.file_uploader("Upload 4-yr roll-up (sheet 'Historical Data Input')", type=["xlsx","xls"])
     if not uploaded:
         st.info("Please upload your Excel file to proceed."); st.stop()
-    df_hist = pd.read_excel(uploaded, sheet_name="Historical Data Input")
+    df_hist = pd.read_excel(uploaded, sheet_name="Historical Data Input") # Excel must be titled "Historical Data Input"
     df_hist.columns = (
         df_hist.columns.str.strip().str.lower().str.replace(" ", "_")
     )
@@ -745,15 +745,22 @@ elif sim_choice == "Annual Historical Simulation":
     st.subheader("📝 FY Planning Inputs (Oct–Sep)")
     months = list(range(10, 13)) + list(range(1, 10))  # Oct–Sep
     month_names = [calendar.month_abbr[m] for m in months]
+    
     default_matrix = pd.DataFrame({
         "Month": month_names,
-        "O&M Days": [20]*12,
-        "Degraders": [0]*12,
-        "Turn Pattern": ["8x6"]*12,
-        "Commit %": [65]*12,
-        "ASD": [2.0]*12
+        "O&M Days": [20] * 12,
+    
+        # New: planned non-possessed tails by month (Depot / Mods / UPNR)
+        "Depot/UPNR Tails": [0] * 12,
+    
+        # Keep existing: degrader bucket (we will later split into sched/unsch)
+        "Degraders": [0] * 12,
+    
+        "Turn Pattern": ["8x6"] * 12,
+        "Commit %": [65] * 12,
+        "ASD": [2.0] * 12,
     })
-
+    
     with st.expander("📝 FY Planning Inputs (Oct–Sep)", expanded=True):
         plan_df = st.data_editor(
             default_matrix,
@@ -762,28 +769,52 @@ elif sim_choice == "Annual Historical Simulation":
             hide_index=True,
             key="annual_planning_grid"
         )
-
+    
     # --- 4) Top-level planning goals ---
-    with st.expander("📝 FY Planning Inputs (Oct–Sep)", expanded=True):
+    with st.expander("🎯 FY Goals & Assumptions", expanded=True):
+        unit_name = st.text_input("Unit / Wing / MDS (for report)", value="", help="Example: 94 AMW / C-130H")
+        run_date = st.date_input("Run Date", value=None)
         TAI         = st.number_input("TAI (Aircraft Inventory)", value=12, step=1)
         FY_goal     = st.number_input("FY Flying-Hour Goal (hrs)", value=0.0, step=100.0)
         ASD         = st.number_input("Avg Sortie Duration (hrs)", value=2.0, step=0.1)
         MC_target   = st.slider("MC-Rate Target (%)", 0, 100, 80, help="Desired minimum MC-rate")
-        mc_delta    = st.slider("Adjust MC Rate (%)", -10, 10, 0, step=1, help="Test impact of improved/degraded MC-rate")
+        st.caption(
+            "MC Target is a reference goal for comparison only. "
+            "It does not alter simulation behavior."
+        )
+        mc_delta = st.slider(
+            "Adjust MC Rate (%)",
+            min_value=-10,
+            max_value=10,
+            value=0,
+            step=1,
+            help=(
+                "Scenario sensitivity only. Applies a uniform percentage adjustment to "
+                "historical monthly MC rates before simulation.\n\n"
+                "• Does NOT change historical data\n"
+                "• Does NOT force the model to meet MC targets\n"
+                "• Used to test the impact of improved or degraded maintenance performance"
+            ),
+        )
 
-        # --- Uncertainty slider for Monte Carlo noise ---
         uncertainty = st.slider(
             "Monthly uncertainty (±%)",
             min_value=0, max_value=20, value=5, step=1,
             help="Amount of random variation in MC and Execution rates per month"
         ) / 100.0
-
+    
     # --- 5) Extract planning inputs as dicts keyed by month_num ---
     om_days = {m: int(plan_df.loc[i, "O&M Days"]) for i, m in enumerate(months)}
+    
+    # New: depot/upnr tails (planned non-possessed)
+    depot_upnr_tails = {m: int(plan_df.loc[i, "Depot/UPNR Tails"]) for i, m in enumerate(months)}
+    
+    # Keep existing degrader input for now
     degraders = {m: int(plan_df.loc[i, "Degraders"]) for i, m in enumerate(months)}
-    turn_patterns = {m: plan_df.loc[i, "Turn Pattern"] for i, m in enumerate(months)}
-    commit_rates = {m: float(plan_df.loc[i, "Commit %"])/100.0 for i, m in enumerate(months)}
-    asd_dict = {m: float(plan_df.loc[i, "ASD"]) for i, m in enumerate(months)}  # Not used yet, for future
+    
+    turn_patterns = {m: str(plan_df.loc[i, "Turn Pattern"]) for i, m in enumerate(months)}
+    commit_rates = {m: float(plan_df.loc[i, "Commit %"]) / 100.0 for i, m in enumerate(months)}
+    asd_dict = {m: float(plan_df.loc[i, "ASD"]) for i, m in enumerate(months)}
 
     # --- 6) Run Simulation Button ---
     if st.button("Run Annual Analysis"):
@@ -797,10 +828,12 @@ elif sim_choice == "Annual Historical Simulation":
             "TAI": TAI,
             "om_days": om_days,
             "planned_degraders": degraders,
+            "planned_depot_upnr": depot_upnr_tails,   # NEW
             "turn_patterns": turn_patterns,
             "commit_rates": commit_rates,
             "uncertainty": uncertainty
         }
+
         sim = HistoricalAnnualSimulation()
         sim.params = sim_params
 
@@ -824,8 +857,57 @@ elif sim_choice == "Annual Historical Simulation":
         # Assign month_name for charts/tables
         results_df["month_name"] = [calendar.month_abbr[m] for m in results_df["month"]]
 
+        # --- MC Target vs Sim (display-only) ---
+        st.subheader("🎯 MC Target vs Simulated MC")
+        
+        mc_target = float(MC_target) / 100.0
+        
+        # Ensure column exists (engine should produce mc_rate_mean)
+        if "mc_rate_mean" in results_df.columns:
+            results_df["mc_gap_to_target"] = results_df["mc_rate_mean"] - mc_target
+            months_below = int((results_df["mc_gap_to_target"] < 0).sum())
+            worst_gap = float(results_df["mc_gap_to_target"].min())
+        
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("MC Target", f"{mc_target:.0%}")
+            with c2:
+                st.metric("Months below target", f"{months_below}/12")
+            with c3:
+                st.metric("Worst gap", f"{worst_gap:+.1%}")
+        
+            with st.expander("📋 MC by month vs target", expanded=False):
+                st.dataframe(
+                    results_df[["month_name", "mc_rate_mean", "mc_gap_to_target"]],
+                    use_container_width=True
+                )
+        else:
+            st.info("MC target view unavailable: 'mc_rate_mean' not found in results.")
+            
+            # --- MC chart vs target line ---
+        import plotly.graph_objects as go
 
-        # --- 7) Show Alerts for Over-commitment ---
+        fig_mc = go.Figure()
+        fig_mc.add_trace(go.Scatter(
+            x=results_df["month_name"],
+            y=results_df["mc_rate_mean"],
+            mode="lines+markers",
+            name="Sim MC mean"
+        ))
+        fig_mc.add_hline(
+            y=mc_target,
+            line_dash="dash",
+            annotation_text=f"Target {mc_target:.0%}",
+        )
+        fig_mc.update_layout(
+            yaxis_tickformat=".0%",
+            yaxis_title="MC Rate",
+            xaxis_title="Month",
+            title="Simulated MC Mean vs Target"
+        )
+        st.plotly_chart(fig_mc, use_container_width=True)
+
+# --- 7) Show Alerts for Over-commitment ---
         with st.expander("⚠️ Alerts & Warnings", expanded=False):
             st.caption(
                 "Flyable supply here is computed using **AA rate** (mc_hours / TAI_hours). "
@@ -835,8 +917,11 @@ elif sim_choice == "Annual Historical Simulation":
             for m in months:
                 r = rates_df_adj[rates_df_adj["month_num"] == m].iloc[0]
         
-                tai_after_degraders = max(0, int(TAI) - int(degraders[m]))
-        
+                tai_after_degraders = max(
+                    0,
+                    int(TAI) - int(degraders[m]) - int(depot_upnr_tails.get(m, 0))
+                )
+
                 # Prefer AA-rate for supply (new standard). Fallback to MC-rate if AA missing.
                 aa_rate = float(r.get("aa_rate", np.nan))
                 mc_rate = float(r.get("mc_rate", np.nan))
@@ -860,7 +945,8 @@ elif sim_choice == "Annual Historical Simulation":
                     # Debug line so users can “see the math”
                     st.write(
                         f"**{calendar.month_abbr[m]}** — "
-                        f"TAI {int(TAI)} − Degraders {int(degraders[m])} = **{tai_after_degraders}** | "
+                        f"TAI {int(TAI)} − Degraders {int(degraders[m])} − Depot/UPNR {int(depot_upnr_tails.get(m,0))} "
+                        f"= **{tai_after_degraders}** | "
                         f"AA {aa_rate_used:.2%}"
                         + (f" (MC {mc_rate:.2%})" if np.isfinite(mc_rate) else "")
                         + f" → Flyable ≈ **{flyable_ac}** | First-go **{first_go}** | Commit **{commit_pct:.1f}%**"
@@ -961,6 +1047,8 @@ elif sim_choice == "Annual Historical Simulation":
             "flown_ci_lo",
             "flown_ci_hi",
             "mc_rate_mean",
+            "mc_gap_to_target",
+            "aa_rate_mean",
             "execution_rate_mean",
             "avg_flyable",
             "overcommit_risk",
@@ -968,6 +1056,9 @@ elif sim_choice == "Annual Historical Simulation":
             "gab_rate_mean",
             "spared_gab_rate_mean"
         ]
+
+        if "mc_rate_mean" in results_df.columns and "mc_gap_to_target" not in results_df.columns:
+           results_df["mc_gap_to_target"] = results_df["mc_rate_mean"] - mc_target
 
         # Ensure the DataFrame has all these columns (add empty if needed for robustness)
         for col in csv_columns:
@@ -990,6 +1081,8 @@ elif sim_choice == "Annual Historical Simulation":
             "flown_ci_lo": np.nan,
             "flown_ci_hi": np.nan,
             "mc_rate_mean": np.nan,
+            "mc_gap_to_target": np.nan,
+            "aa_rate_mean": np.nan,
             "execution_rate_mean": np.nan,
             "avg_flyable": np.nan,
             "overcommit_risk": np.nan,
@@ -1003,6 +1096,11 @@ elif sim_choice == "Annual Historical Simulation":
             results_df_totals,
             pd.DataFrame([total_row])
         ], ignore_index=True)
+
+        results_df_totals.insert(0, "unit", unit_name)
+        results_df_totals.insert(1, "run_date", str(run_date))
+        results_df_totals.insert(2, "FY_goal_hours", FY_goal)
+        results_df_totals.insert(3, "MC_target", mc_target)
 
         # Show table in app
         st.dataframe(results_df_totals, use_container_width=True)

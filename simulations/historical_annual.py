@@ -80,6 +80,11 @@ class HistoricalAnnualSimulation(SimulationBase):
                 
                 exe_rate = np.clip(np.random.normal(r["execution_rate"], uncertainty), 0, 1)
                 
+                planned_nonposs = int(self.params.get("planned_depot_upnr", {}).get(m, 0))
+                effective_tai = max(0, int(TAI) - planned_nonposs)
+                
+                flyable_ac = max(0, math.floor((effective_tai - int(degraders[m])) * aa_rate))
+
                 # Flyable supply for scheduling is AA-driven (assigned-based availability),
                 # degraders still subtract from TAI as planned losses.
                 flyable_ac = max(0, math.floor((TAI - degraders[m]) * aa_rate))
@@ -155,4 +160,6 @@ class HistoricalAnnualSimulation(SimulationBase):
         return trial_results, [summary]  # (keep in list for compatibility)
 
     def run(self):
-        return self.simulate(trials=500)[0]
+        trials = int(self.params.get("trials", 500))
+        return self.simulate(trials=trials)  # returns (trial_results, [summary])
+
