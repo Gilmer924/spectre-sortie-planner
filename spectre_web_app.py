@@ -705,6 +705,21 @@ elif sim_choice == "Annual Historical Simulation":
 
     st.header("📅 Annual Historical Simulation")
 
+    # --- 0) First Look metadata (for export & filing) ---
+    with st.expander("📌 First Look Metadata", expanded=True):
+        unit_name = st.text_input(
+            "Unit / Wing / MDS (for export)",
+            value="",
+            key="annual_firstlook_unit",
+            help="Example: 94 AW / C-130H or 301 FW / F-35A"
+        )
+        run_date = st.date_input(
+            "Run date",
+            value=None,
+            key="annual_firstlook_date",
+            help="Date this First Look was generated (used in the export)."
+        )
+
     # --- 1) Upload historical data ---
     uploaded = st.file_uploader("Upload 4-yr roll-up (sheet 'Historical Data Input')", type=["xlsx","xls"])
     if not uploaded:
@@ -734,10 +749,10 @@ elif sim_choice == "Annual Historical Simulation":
         )
         # Show a reminder/info
         st.info("You may change any monthly rate in the table above. These edits will override the imported historical values for the simulation.")
-    
+
     with st.expander("See Original Calculated Rates", expanded=False):
         st.dataframe(rates_df, use_container_width=True)
-    
+
     # Use 'edited' as rates_df for all downstream calculations
     rates_df = edited
 
@@ -745,22 +760,27 @@ elif sim_choice == "Annual Historical Simulation":
     st.subheader("📝 FY Planning Inputs (Oct–Sep)")
     months = list(range(10, 13)) + list(range(1, 10))  # Oct–Sep
     month_names = [calendar.month_abbr[m] for m in months]
-    
+
     default_matrix = pd.DataFrame({
         "Month": month_names,
         "O&M Days": [20] * 12,
-    
-        # New: planned non-possessed tails by month (Depot / Mods / UPNR)
+
+        # Planned non-possessed tails by month (Depot / Mods / UPNR)
         "Depot/UPNR Tails": [0] * 12,
-    
-        # Keep existing: degrader bucket (we will later split into sched/unsch)
+
+        # Degrader bucket (we’ll later split into sched/unsch if desired)
         "Degraders": [0] * 12,
-    
+
+        # NEW: Off-station bins (force-flow)
+        "Deployment Tails": [0] * 12,          # off-station, no home training
+        "TDY Tails": [0] * 12,                  # off-station, can still produce hours
+        "TDY Hours per Tail (mo)": [0.0] * 12,   # avg monthly hours produced per TDY tail
+
         "Turn Pattern": ["8x6"] * 12,
         "Commit %": [65] * 12,
         "ASD": [2.0] * 12,
     })
-    
+
     with st.expander("📝 FY Planning Inputs (Oct–Sep)", expanded=True):
         plan_df = st.data_editor(
             default_matrix,
@@ -769,52 +789,51 @@ elif sim_choice == "Annual Historical Simulation":
             hide_index=True,
             key="annual_planning_grid"
         )
-    
+
     # --- 4) Top-level planning goals ---
     with st.expander("🎯 FY Goals & Assumptions", expanded=True):
-        unit_name = st.text_input("Unit / Wing / MDS (for report)", value="", help="Example: 94 AMW / C-130H")
-        run_date = st.date_input("Run Date", value=None)
         TAI         = st.number_input("TAI (Aircraft Inventory)", value=12, step=1)
         FY_goal     = st.number_input("FY Flying-Hour Goal (hrs)", value=0.0, step=100.0)
         ASD         = st.number_input("Avg Sortie Duration (hrs)", value=2.0, step=0.1)
-        MC_target   = st.slider("MC-Rate Target (%)", 0, 100, 80, help="Desired minimum MC-rate")
-        st.caption(
-            "MC Target is a reference goal for comparison only. "
-            "It does not alter simulation behavior."
+
+        MC_target   = st.slider(
+            "MC-Rate Target (%)", 0, 100, 80,
+            help="Goal setter only. Used for comparison vs simulated MC mean by month."
         )
+
         mc_delta = st.slider(
-            "Adjust MC Rate (%)",
-            min_value=-10,
-            max_value=10,
-            value=0,
-            step=1,
+            "Adjust MC Rate (%)", -10, 10, 0, step=1,
             help=(
-                "Scenario sensitivity only. Applies a uniform percentage adjustment to "
-                "historical monthly MC rates before simulation.\n\n"
-                "• Does NOT change historical data\n"
-                "• Does NOT force the model to meet MC targets\n"
-                "• Used to test the impact of improved or degraded maintenance performance"
-            ),
+                "Applies a proportional adjustment to the imported/calculated MC rate for testing.\n"
+                "Example: +5 increases MC by 5% (0.80 → 0.84). This does NOT change the upload; "
+                "it only modifies the simulation inputs."
+            )
         )
 
         uncertainty = st.slider(
             "Monthly uncertainty (±%)",
             min_value=0, max_value=20, value=5, step=1,
-            help="Amount of random variation in MC and Execution rates per month"
+            help="Random variation applied to AA/MC and execution rates each trial/month."
         ) / 100.0
-    
+
     # --- 5) Extract planning inputs as dicts keyed by month_num ---
     om_days = {m: int(plan_df.loc[i, "O&M Days"]) for i, m in enumerate(months)}
-    
-    # New: depot/upnr tails (planned non-possessed)
+
     depot_upnr_tails = {m: int(plan_df.loc[i, "Depot/UPNR Tails"]) for i, m in enumerate(months)}
-    
-    # Keep existing degrader input for now
     degraders = {m: int(plan_df.loc[i, "Degraders"]) for i, m in enumerate(months)}
-    
+
+    # NEW: Force-flow bins
+    deployment_tails = {m: int(plan_df.loc[i, "Deployment Tails"]) for i, m in enumerate(months)}
+    tdy_tails = {m: int(plan_df.loc[i, "TDY Tails"]) for i, m in enumerate(months)}
+    tdy_hours_per_tail = {m: float(plan_df.loc[i, "TDY Hours per Tail (mo)"]) for i, m in enumerate(months)}
+
     turn_patterns = {m: str(plan_df.loc[i, "Turn Pattern"]) for i, m in enumerate(months)}
     commit_rates = {m: float(plan_df.loc[i, "Commit %"]) / 100.0 for i, m in enumerate(months)}
     asd_dict = {m: float(plan_df.loc[i, "ASD"]) for i, m in enumerate(months)}
+
+    deployment_tails = {m: int(plan_df.loc[i, "Deployment Tails"]) for i, m in enumerate(months)}
+    tdy_tails        = {m: int(plan_df.loc[i, "TDY Tails"]) for i, m in enumerate(months)}
+    tdy_hours_tail   = {m: float(plan_df.loc[i, "TDY Hours per Tail (mo)"]) for i, m in enumerate(months)}
 
     # --- 6) Run Simulation Button ---
     if st.button("Run Annual Analysis"):
@@ -827,17 +846,23 @@ elif sim_choice == "Annual Historical Simulation":
             "rates_df": rates_df_adj,
             "TAI": TAI,
             "om_days": om_days,
+        
             "planned_degraders": degraders,
-            "planned_depot_upnr": depot_upnr_tails,   # NEW
+            "planned_depot_upnr": depot_upnr_tails,
+        
+            # Off-station / force-flow bins
+            "planned_deploy_tails": deployment_tails,
+            "planned_tdy_tails": tdy_tails,
+            "planned_tdy_hours_per_tail": tdy_hours_per_tail,  # name matches the table
+        
             "turn_patterns": turn_patterns,
             "commit_rates": commit_rates,
-            "uncertainty": uncertainty
+            "uncertainty": uncertainty,
         }
 
         sim = HistoricalAnnualSimulation()
         sim.params = sim_params
 
-        # --- Run the Monte Carlo sim just once ---
         all_trials, summary = sim.simulate(trials=500)
 
         # Handle if summary is a list of lists
@@ -862,9 +887,16 @@ elif sim_choice == "Annual Historical Simulation":
         
         mc_target = float(MC_target) / 100.0
         
-        # Ensure column exists (engine should produce mc_rate_mean)
         if "mc_rate_mean" in results_df.columns:
+            # Build historical MC series from the edited rates table (same months list)
+            hist_mc = []
+            for m in months:
+                row = rates_df_adj[rates_df_adj["month_num"] == m]
+                hist_mc.append(float(row.iloc[0]["mc_rate"]) if len(row) else float("nan"))
+        
+            results_df["mc_hist"] = hist_mc
             results_df["mc_gap_to_target"] = results_df["mc_rate_mean"] - mc_target
+        
             months_below = int((results_df["mc_gap_to_target"] < 0).sum())
             worst_gap = float(results_df["mc_gap_to_target"].min())
         
@@ -876,15 +908,33 @@ elif sim_choice == "Annual Historical Simulation":
             with c3:
                 st.metric("Worst gap", f"{worst_gap:+.1%}")
         
-            with st.expander("📋 MC by month vs target", expanded=False):
+            # Clean, high-confidence chart: Sim MC vs Historical MC + Target line
+            import plotly.graph_objects as go
+            fig_mc = go.Figure()
+            fig_mc.add_trace(go.Scatter(
+                x=results_df["month_name"], y=results_df["mc_rate_mean"],
+                mode="lines+markers", name="Simulated MC (mean)"
+            ))
+            fig_mc.add_trace(go.Scatter(
+                x=results_df["month_name"], y=results_df["mc_hist"],
+                mode="lines+markers", name="Historical MC (from upload)"
+            ))
+            fig_mc.add_hline(
+                y=mc_target, line_dash="dash",
+                annotation_text="MC Target", annotation_position="top left"
+            )
+            fig_mc.update_layout(yaxis_tickformat=".0%", yaxis_title="MC Rate")
+            st.plotly_chart(fig_mc, use_container_width=True)
+        
+            with st.expander("📋 MC by month (Sim vs Historical vs Target)", expanded=False):
                 st.dataframe(
-                    results_df[["month_name", "mc_rate_mean", "mc_gap_to_target"]],
+                    results_df[["month_name", "mc_hist", "mc_rate_mean", "mc_gap_to_target"]],
                     use_container_width=True
                 )
         else:
             st.info("MC target view unavailable: 'mc_rate_mean' not found in results.")
-            
-            # --- MC chart vs target line ---
+
+        # --- MC chart vs target line ---
         import plotly.graph_objects as go
 
         fig_mc = go.Figure()
@@ -907,86 +957,106 @@ elif sim_choice == "Annual Historical Simulation":
         )
         st.plotly_chart(fig_mc, use_container_width=True)
 
-# --- 7) Show Alerts for Over-commitment ---
         with st.expander("⚠️ Alerts & Warnings", expanded=False):
             st.caption(
-                "Flyable supply here is computed using **AA rate** (mc_hours / TAI_hours). "
-                "MC rate is shown for context (mc_hours / possessed_hours)."
+                "This panel separates **structure risk** (tails removed from home) from **performance risk** (MC/execution). "
+                "Supply here follows the sim engine: **flyable_home ≈ floor(tai_home × MC)**."
             )
         
             for m in months:
                 r = rates_df_adj[rates_df_adj["month_num"] == m].iloc[0]
         
-                tai_after_degraders = max(
-                    0,
-                    int(TAI) - int(degraders[m]) - int(depot_upnr_tails.get(m, 0))
-                )
-
-                # Prefer AA-rate for supply (new standard). Fallback to MC-rate if AA missing.
-                aa_rate = float(r.get("aa_rate", np.nan))
                 mc_rate = float(r.get("mc_rate", np.nan))
+                exe_rate = float(r.get("execution_rate", np.nan))
         
-                if not np.isfinite(aa_rate):
-                    aa_rate_used = float(mc_rate) if np.isfinite(mc_rate) else 0.0
-                    aa_note = "AA missing → using MC rate as fallback"
-                else:
-                    aa_rate_used = aa_rate
-                    aa_note = None
+                # Structure inputs
+                degr = int(degraders.get(m, 0))
+                depot = int(depot_upnr_tails.get(m, 0))
         
-                # Flyable tails (AA-driven)
-                flyable_ac = max(0, math.floor(tai_after_degraders * aa_rate_used))
+                # (Future bins will subtract here too; keeping placeholders is safe)
+                deploy = int(plan_df.loc[months.index(m), "Deploy Tails"]) if "Deploy Tails" in plan_df.columns else 0
+                tdy = int(plan_df.loc[months.index(m), "TDY Tails"]) if "TDY Tails" in plan_df.columns else 0
         
-                first_go = int(str(turn_patterns[m]).split("x")[0]) if turn_patterns[m] else 0
+                tai_home = max(0, int(TAI) - degr - depot - deploy - tdy)
         
-                # Commit risk
-                if flyable_ac > 0:
-                    commit_pct = first_go / flyable_ac * 100.0
+                # Plan requirement
+                first_go = int(str(turn_patterns[m]).split("x")[0]) if turn_patterns.get(m) else 0
+                days = int(om_days.get(m, 0))
+                sorties_per_day = sum(map(int, str(turn_patterns[m]).split("x"))) if turn_patterns.get(m) else 0
+                scheduled = sorties_per_day * days
         
-                    # Debug line so users can “see the math”
-                    st.write(
-                        f"**{calendar.month_abbr[m]}** — "
-                        f"TAI {int(TAI)} − Degraders {int(degraders[m])} − Depot/UPNR {int(depot_upnr_tails.get(m,0))} "
-                        f"= **{tai_after_degraders}** | "
-                        f"AA {aa_rate_used:.2%}"
-                        + (f" (MC {mc_rate:.2%})" if np.isfinite(mc_rate) else "")
-                        + f" → Flyable ≈ **{flyable_ac}** | First-go **{first_go}** | Commit **{commit_pct:.1f}%**"
+                # Performance-driven supply (matches engine intent)
+                mc_used = mc_rate if np.isfinite(mc_rate) else 0.0
+                flyable = max(0, math.floor(tai_home * mc_used))
+        
+                # Commit percent against flyable
+                commit_pct = (first_go / flyable * 100.0) if flyable > 0 else float("inf")
+        
+                # Classify limiting factor
+                # Structure-limited if even perfect MC (1.0) can't support first_go (i.e., tai_home < first_go)
+                structure_limited = (tai_home < first_go) if first_go > 0 else False
+                # Rate-limited if structure could support but performance makes flyable < first_go
+                rate_limited = (tai_home >= first_go and flyable < first_go) if first_go > 0 else False
+        
+                # Debug “see the math”
+                st.write(
+                    f"**{calendar.month_abbr[m]}** — "
+                    f"TAI {int(TAI)} − Degr {degr} − Depot/UPNR {depot}"
+                    + (f" − Deploy {deploy}" if deploy else "")
+                    + (f" − TDY {tdy}" if tdy else "")
+                    + f" = **{tai_home} home** | "
+                    f"MC {mc_used:.2%} → Flyable ≈ **{flyable}** | "
+                    f"First-go **{first_go}** | Commit **{commit_pct if flyable>0 else 0:.1f}%**"
+                )
+        
+                # Messages
+                if first_go == 0 or scheduled == 0:
+                    st.info(f"{calendar.month_abbr[m]}: No flying scheduled (pattern or O&M days = 0).")
+                    continue
+        
+                if tai_home <= 0:
+                    st.error(f"{calendar.month_abbr[m]}: STRUCTURE-LIMITED — No home tails available after planning bins.")
+                    continue
+        
+                if structure_limited:
+                    st.error(
+                        f"{calendar.month_abbr[m]}: STRUCTURE-LIMITED — Home structure ({tai_home}) < first-go ({first_go}). "
+                        "Reduce bins (depot/degraders/deploy/TDY) or reduce first-go/turn pattern."
                     )
-        
-                    if aa_note:
-                        st.caption(f"🛈 {aa_note}")
-        
+                elif rate_limited:
+                    st.warning(
+                        f"{calendar.month_abbr[m]}: RATE-LIMITED — Home structure supports first-go, but MC reduces flyable to {flyable}. "
+                        "Improve MC, reduce first-go, or increase spares/maintenance capacity."
+                    )
+                else:
+                    # Standard overcommit warning still applies
                     if commit_pct > 80:
                         st.warning(
-                            f"{calendar.month_abbr[m]}: Over-committed! "
-                            f"{first_go} committed / {flyable_ac} flyable ({commit_pct:.1f}%)"
+                            f"{calendar.month_abbr[m]}: Over-committed — {first_go}/{flyable} flyable ({commit_pct:.1f}%)."
                         )
                     else:
-                        st.info(f"{calendar.month_abbr[m]}: Commit rate {commit_pct:.1f}% (OK)")
-                else:
-                    st.write(
-                        f"**{calendar.month_abbr[m]}** — "
-                        f"TAI after degraders = **{tai_after_degraders}**, "
-                        f"AA used = **{aa_rate_used:.2%}** → Flyable = **0**"
-                    )
-                    if aa_note:
-                        st.caption(f"🛈 {aa_note}")
-                    st.error(f"{calendar.month_abbr[m]}: No flyable AC available!")
+                        st.success(f"{calendar.month_abbr[m]}: OK — {first_go}/{flyable} flyable ({commit_pct:.1f}%).")
 
         # --- 7b) Probability of Meeting Flying Hour Goal ---
         st.subheader("🎯 Probability of Meeting Flying Hour Goal")
         # Calculate hours flown for each trial (as sum over months)
         all_hours_flown = []
+        tdy_hours = tdy_hours_per_tail  # {month_num: hours}
+
         for trial in all_trials:
             trial_hours = 0.0
             for m_result in trial:
-                # Use month-specific ASD
                 asd = asd_dict[m_result["month"]]
-                # Use mean/actual "flown" key as present in your trial dict
                 flown_val = (
-                    m_result["flown"] if "flown" in m_result else m_result.get("flown_mean", 0)
+                    m_result["flown"]
+                    if "flown" in m_result
+                    else m_result.get("flown_mean", 0)
                 )
-                trial_hours += flown_val * asd
+
+                trial_hours += (flown_val * asd) + float(tdy_hours.get(m_result["month"], 0.0))
+
             all_hours_flown.append(trial_hours)
+
         n_success = sum(h >= FY_goal for h in all_hours_flown)
         prob_success = n_success / len(all_hours_flown) if len(all_hours_flown) else 0.0
         st.info(
@@ -1097,20 +1167,30 @@ elif sim_choice == "Annual Historical Simulation":
             pd.DataFrame([total_row])
         ], ignore_index=True)
 
-        results_df_totals.insert(0, "unit", unit_name)
-        results_df_totals.insert(1, "run_date", str(run_date))
-        results_df_totals.insert(2, "FY_goal_hours", FY_goal)
-        results_df_totals.insert(3, "MC_target", mc_target)
+        # --- Add metadata columns (safe defaults; prevents NameError / None issues) ---
+        unit_safe = (unit_name or "").strip()
+        run_date_safe = str(run_date) if run_date is not None else ""
+
+        results_df_totals.insert(0, "unit", unit_safe)
+        results_df_totals.insert(1, "run_date", run_date_safe)
+        results_df_totals.insert(2, "FY_goal_hours", float(FY_goal))
+        results_df_totals.insert(3, "MC_target", float(mc_target))
 
         # Show table in app
         st.dataframe(results_df_totals, use_container_width=True)
 
         # Download as CSV
         csv_buf = results_df_totals.to_csv(index=False).encode("utf-8")
+        
+        # Build a friendly, email-ready filename
+        safe_unit = unit_safe.replace("/", "-").replace("\\", "-").replace(" ", "_") if unit_safe else "Annual_First_Look"
+        date_stub = run_date_safe if run_date_safe else ""
+        file_name = f"{safe_unit}_{date_stub}.csv" if date_stub else f"{safe_unit}.csv"
+        
         st.download_button(
             "📥 Download Detailed Results CSV",
             csv_buf,
-            file_name="annual_sim_results.csv",
+            file_name=file_name,
             mime="text/csv"
         )
 
@@ -2160,6 +2240,44 @@ elif sim_choice == "SPECTRE Flight Manual":
     into **what you can actually schedule** (Weekly) and **what you must have to meet requirements** (RIM / North Star).
     """)
 
+    with st.expander("3) Key definitions ", expanded=False):
+        st.markdown("""
+        - **TAI**: Total Aircraft Inventory. Total Tails Assigned
+        - **PAI**: Primary Assigned Inventory. Tails resourced for crews/flying hours (your “programmed” fleet)
+        - **BAI**: Tails that preserve the program when Depot/UPNR hits (TAI − PAI)
+        - **Depot/UPNR**: non-possessed / not available to schedule
+        - **EP**: effective possessed after NMC bins (what’s truly available)
+        - **NMC Flyable**: coded NMC but can still be scheduled (headroom, not EP)
+        - **Turn Factor (TF)**: sorties per jet per fly day (how hard you’re turning)
+        - **Attrition**: sorties that won’t happen (weather/abort/cancel), driving extra scheduled lines
+        """)
+
+    with st.expander(" MC vs AA (How SPECTRE Uses Them)", expanded=False):
+        st.markdown("""
+    ### Definitions
+    - **MC Rate** = **MC Hours / Possessed Hours**  
+      *What I did with the equipment I possessed.*  
+      This reflects **maintenance performance** on aircraft that were physically present.
+    
+    - **AA Rate** = **MC Hours / TAI Hours**  
+      *What I did with the equipment I own (assigned).*  
+      This reflects **structural availability** (sensitive to Depot/UPNR, deployments, off-station time).
+    
+    ### Annual First Look Modeling Rule
+    SPECTRE separates **Structure** from **Performance**:
+    
+    1) **Structure (Planning bins remove tails at home):**  
+       TAI_home = TAI − Degraders − Depot/UPNR − Deployments − TDY − Scheduled Mx − Unscheduled Mx reserve
+    
+    2) **Performance (MC applies to what remains at home):**  
+       Flyable_home ≈ TAI_home × MC_rate
+    
+    ### Why AA is still shown
+    AA is reported for **context and validation**:
+    - If simulated availability is far below historical AA, you likely over-binned structure.
+    - If MC is healthy but AA is poor, the limiting factor is usually **possession/structure**, not maintenance performance.
+    """)
+
     with st.expander("1) What each mode does", expanded=False):
         st.markdown("""
         **Weekly Simulation**
@@ -2186,18 +2304,6 @@ elif sim_choice == "SPECTRE Flight Manual":
         3. Enter NMC bins and NMC-flyable headroom
         4. Enter crews + SPCM, confirm Turn Factor (TF), set attrition
         5. Read margins + pattern recommendations + reverse FHP math
-        """)
-
-    with st.expander("3) Key definitions (plain language)", expanded=False):
-        st.markdown("""
-        - **TAI**: Total Aircraft Inventory. Total Tails Assigned
-        - **PAI**: Primary Assigned Inventory. Tails resourced for crews/flying hours (your “programmed” fleet)
-        - **BAI**: Tails that preserve the program when Depot/UPNR hits (TAI − PAI)
-        - **Depot/UPNR**: non-possessed / not available to schedule
-        - **EP**: effective possessed after NMC bins (what’s truly available)
-        - **NMC Flyable**: coded NMC but can still be scheduled (headroom, not EP)
-        - **Turn Factor (TF)**: sorties per jet per fly day (how hard you’re turning)
-        - **Attrition**: sorties that won’t happen (weather/abort/cancel), driving extra scheduled lines
         """)
 
     with st.expander("4) Interpreting the output", expanded=False):
