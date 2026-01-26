@@ -6,28 +6,38 @@ Created on Thu Jul  3 06:31:44 2025
 """
 import pandas as pd
 
-def calculate_monthly_rates(df_hist: pd.DataFrame) -> pd.DataFrame:
+def calculate_monthly_rates(df_hist):
     """
-    Takes normalized df_hist and computes monthly rates used by the Annual Historical Simulation.
+    Compute monthly historical rates used by Annual Historical Simulation.
 
-    Expected minimum columns (case/spacing doesn't matter if you normalized earlier):
-      - month
-      - tai_hours
-      - possessed_hours
-      - mc_hours
-      - hours_flown
-      - sorties_flown
-      - sorties_scheduled
-      - ground_aborts
-      - not_spared_ground_aborts
-      - breaks
-      - fixes_8hr
-      - fixes_12hr
-      - fixes_24hr
+    ──────────────────────────────────────────────────────────────
+    CRITICAL DEFINITIONS (do not mix these):
+      • MC rate  = mc_hours / possessed_hours
+        - "What I did with the equipment I possessed."
+        - Maintenance performance metric.
 
-    Returns:
-      DataFrame with month_num plus calculated rates and average aircraft counts.
+      • AA rate  = mc_hours / tai_hours
+        - "What I did with the equipment I own (assigned)."
+        - Structural availability metric, sensitive to depot/UPNR/off-station.
+
+    MODELING INTENT IN SPECTRE (Annual First Look):
+      • Planning bins (Depot/UPNR, Deployments, TDY, Scheduled/Unscheduled Mx)
+        reduce *available assigned tails* at home (structure).
+      • Historical MC rate is applied to the remaining home-station tails
+        to estimate flyable supply (performance on possessed/home tails).
+      • AA rate is reported for comparison/sanity-check and historical context.
+        It should NOT be used as the primary flyable multiplier after planning
+        bins are already subtracted (that double-counts structural losses).
+    ──────────────────────────────────────────────────────────────
+
+    Expected columns include:
+      month, tai_hours, possessed_hours, mc_hours, hours_flown,
+      sorties_flown, sorties_scheduled, ground_aborts, not_spared_ground_aborts,
+      breaks, fixes_8hr, fixes_12hr, fixes_24hr, ...
+
+    Returns: DataFrame with month_num and computed rates (mc_rate, aa_rate, etc.).
     """
+
     import calendar
 
     df = df_hist.copy()
