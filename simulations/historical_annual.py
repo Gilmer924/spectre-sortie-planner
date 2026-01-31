@@ -276,7 +276,8 @@ class HistoricalAnnualSimulation(SimulationBase):
         
         # Preserve original months sequence
         months = list(range(10, 13)) + list(range(1, 10))
-        
+
+        planned_degraders = self.params.get("planned_degraders", {})
         planned_depot_upnr = self.params.get("planned_depot_upnr", {})
         planned_deploy_tails = self.params.get("planned_deploy_tails", {})
         planned_tdy_tails = self.params.get("planned_tdy_tails", {})
@@ -329,14 +330,22 @@ class HistoricalAnnualSimulation(SimulationBase):
                     # Calculate average days an aircraft stays in maintenance
                     exp_fix_days = (1*f8 + 2*f12 + 3*f24) / fix_sum if fix_sum > 1e-9 else 2.0
 
-                    # 3. Structural Availability
-                    depot = self.safe_access(planned_depot_upnr, m)
-                    deploy = self.safe_access(planned_deploy_tails, m)
-                    tdy = self.safe_access(planned_tdy_tails, m)
-                    days = self.safe_access(om_days, m, min_val=1.0)
+                    # --- 3. Structural Availability (Corrected for self.params) ---
+                    # Pull values from the dictionaries passed in self.params
+                    # We use the key names defined in your web_app.py sim_params
+                    
+                    depot   = self.safe_access(self.params.get("planned_depot_upnr", {}), m)
+                    deploy  = self.safe_access(self.params.get("planned_deploy_tails", {}), m)
+                    tdy     = self.safe_access(self.params.get("planned_tdy_tails", {}), m)
+                    
+                    # This captures your "Scheduled MX Tails" from the UI
+                    nmc_sched = self.safe_access(self.params.get("planned_degraders", {}), m)
+                    
+                    # Monthly O&M Days
+                    days = self.safe_access(self.params.get("om_days", {}), m, min_val=1.0)
 
+                    # Calculate possessed aircraft remaining at home station
                     possessed_home = max(0.0, float(TAI) - depot - deploy - tdy)
-                    nmc_sched = self.safe_access(degraders, m)
 
                     # --- REWRITTEN SECTION 4 & 5: FLOW-BASED MC LOGIC ---
                     
@@ -409,12 +418,14 @@ class HistoricalAnnualSimulation(SimulationBase):
                     # --- Section 8: Final Package ---
                     monthly.append({
                         "month": m,
+                        "nmc_sched": float(nmc_sched),  # <--- THIS IS THE MISSING LINK
+                        "nmc_unsch": float(nmc_unsch),  # Ensure this variable is also captured
                         "scheduled": scheduled,
                         "flown": flown,
                         "mc_hist": mc_hist,
                         "mc_sim": mc_sim,
                         "flyable_ac": flyable_ac,
-                        "nmc_unsch": nmc_unsch,
+                        # "nmc_unsch": nmc_unsch,
                         "hangar_load_pct": round(hangar_load_pct * 100, 1),
                         "fixes_8hr": round(f8_count, 1),
                         "fixes_12hr": round(f12_count, 1),

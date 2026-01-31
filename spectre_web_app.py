@@ -769,7 +769,7 @@ elif sim_choice == "Annual Historical Simulation":
         "Depot/UPNR Tails": [0] * 12,
 
         # Degrader bucket (we’ll later split into sched/unsch if desired)
-        "Degraders": [0] * 12,
+        "Scheduled MX Tails": [0] * 12,
 
         # NEW: Off-station bins (force-flow)
         "Deployment Tails": [0] * 12,          # off-station, no home training
@@ -818,11 +818,11 @@ elif sim_choice == "Annual Historical Simulation":
 
     # --- 5) Extract planning inputs as dicts keyed by month_num ---
     om_days = {m: int(plan_df.loc[i, "O&M Days"]) for i, m in enumerate(months)}
-
     depot_upnr_tails = {m: int(plan_df.loc[i, "Depot/UPNR Tails"]) for i, m in enumerate(months)}
-    degraders = {m: int(plan_df.loc[i, "Degraders"]) for i, m in enumerate(months)}
 
-    # NEW: Force-flow bins
+    # FIX: Map the UI column "Scheduled MX Tails" to the variable "planned_degraders"
+    planned_degraders = {m: int(plan_df.loc[i, "Scheduled MX Tails"]) for i, m in enumerate(months)}
+
     deployment_tails = {m: int(plan_df.loc[i, "Deployment Tails"]) for i, m in enumerate(months)}
     tdy_tails = {m: int(plan_df.loc[i, "TDY Tails"]) for i, m in enumerate(months)}
     tdy_hours_per_tail = {m: float(plan_df.loc[i, "TDY Hours per Tail (mo)"]) for i, m in enumerate(months)}
@@ -831,13 +831,8 @@ elif sim_choice == "Annual Historical Simulation":
     commit_rates = {m: float(plan_df.loc[i, "Commit %"]) / 100.0 for i, m in enumerate(months)}
     asd_dict = {m: float(plan_df.loc[i, "ASD"]) for i, m in enumerate(months)}
 
-    deployment_tails = {m: int(plan_df.loc[i, "Deployment Tails"]) for i, m in enumerate(months)}
-    tdy_tails        = {m: int(plan_df.loc[i, "TDY Tails"]) for i, m in enumerate(months)}
-    tdy_hours_tail   = {m: float(plan_df.loc[i, "TDY Hours per Tail (mo)"]) for i, m in enumerate(months)}
-
-# --- 6) Run Simulation Button ---
+    # --- 6) Run Simulation Button ---
     if st.button("Run Annual Analysis"):
-        # Apply MC-delta (if any) to rates
         rates_df_adj = rates_df.copy()
         if mc_delta != 0:
             rates_df_adj["mc_rate"] = (rates_df["mc_rate"] * (1 + mc_delta/100)).clip(upper=1.0)
@@ -846,7 +841,8 @@ elif sim_choice == "Annual Historical Simulation":
             "rates_df": rates_df_adj,
             "TAI": TAI,
             "om_days": om_days,
-            "planned_degraders": degraders,
+            # NOW THESE MATCH: Variable created in Step 5 is used here in Step 6
+            "planned_degraders": planned_degraders, 
             "planned_depot_upnr": depot_upnr_tails,
             "planned_deploy_tails": deployment_tails,
             "planned_tdy_tails": tdy_tails,
@@ -859,8 +855,44 @@ elif sim_choice == "Annual Historical Simulation":
         sim = HistoricalAnnualSimulation()
         sim.params = sim_params
 
+        # Ensure the simulation knows 'Degraders' are 'Scheduled Maintenance'
+        if "degraders" in rates_df.columns:
+            rates_df["nmc_sched"] = rates_df["degraders"]
+
         # Execute simulation
         all_trials, summary = sim.simulate(trials=500)
+
+        # --- CORRECTED METRIC CAPTURE ---
+
+        # 1. Calculate Total Hours for EVERY trial (500 totals)
+        # We multiply sorties (flown) by ASD to get actual hours
+        trial_hour_totals = []
+        for trial in all_trials:
+            trial_total = 0.0
+            for m_result in trial:
+                sorties = m_result.get('flown', 0)
+                # Use the month-specific ASD we planned earlier
+                asd_val = asd_dict.get(m_result['month'], ASD)
+                trial_total += (sorties * asd_val)
+            trial_hour_totals.append(trial_total)
+
+        # 2. Mean Flown = Average of those 500 totals
+        mean_flown = float(np.mean(trial_hour_totals))
+
+        # 3. Probability of Success = % of trials hitting the hour goal
+        if len(trial_hour_totals) > 0:
+            prob_success = float(np.sum(np.array(trial_hour_totals) >= FY_goal) / len(trial_hour_totals))
+        else:
+            prob_success = 0.0
+
+        # 4. Status Delta (Shows the gap to the commander)
+        gap = mean_flown - FY_goal
+        if prob_success >= 0.80:
+            status_delta = f"Executable ({gap:+,.0f} hrs)"
+        elif prob_success >= 0.50:
+            status_delta = f"Risk ({gap:+,.0f} hrs)"
+        else:
+            status_delta = f"High Risk ({gap:+,.0f} hrs)"
 
         # Handle summary structure
         # 1. Flatten the summary results into a DataFrame
@@ -909,6 +941,126 @@ elif sim_choice == "Annual Historical Simulation":
             results_df["month"] = months_seq[:len(results_df)]
         results_df["month_name"] = [calendar.month_abbr[int(m)] for m in results_df["month"]]
 
+        # --- STEP 1: CALCULATE STATUS & BUILD RISK BUBBLES ---
+
+        # A. Calculate the thresholds for the "Commander's Logic"
+        worst_idx = results_df['mc_rate_mean'].idxmin()
+        worst_month_name = results_df.loc[worst_idx, 'month_name']
+        worst_mc_val = results_df.loc[worst_idx, 'mc_rate_mean']
+        
+        if prob_success >= 0.80:
+            status_label, status_col, status_icon = "HEALTHY", "green", "✅"
+            status_msg = f"Plan is **fully executable**. Fleet health remains stable."
+        elif prob_success >= 0.50:
+            status_label, status_col, status_icon = "CAUTION", "orange", "⚠️"
+            status_msg = f"**Executable with risk.** Critical constraints in {worst_month_name} ({worst_mc_val:.1%} MC)."
+        else:
+            status_label, status_col, status_icon = "CRITICAL", "red", "🚨"
+            status_msg = f"**Plan unsupportable.** High risk of fleet grounding in {worst_month_name}."
+        
+        # B. Build the Bubble Chart with matching colors
+        risk_colors = []
+        for mc in results_df["mc_rate_mean"]:
+            if mc >= 0.80: risk_colors.append("#2ecc71") # Green
+            elif mc >= 0.50: risk_colors.append("#f39c12") # Orange
+            else: risk_colors.append("#e74c3c") # Red
+        
+        fig_risk_bubbles = go.Figure()
+        fig_risk_bubbles.add_trace(go.Scatter(
+            x=results_df["month_name"],
+            y=results_df["mc_rate_mean"],
+            mode='markers+text',
+            text=[f"{val:.0%}" for val in results_df["mc_rate_mean"]],
+            textposition="top center",
+            marker=dict(size=40, color=risk_colors, opacity=0.9, line=dict(color='black', width=2))
+        ))
+        
+        fig_risk_bubbles.update_layout(
+            title="<b>Monthly Fleet Risk Matrix</b>",
+            yaxis=dict(title="MC Rate", tickformat=".0%", range=[0.4, 1.0]),
+            height=400,
+            margin=dict(l=20, r=20, t=50, b=20),
+            showlegend=False
+        )
+         # Card patch 1 ends
+         
+         # --- BUILD THE MAINTENANCE SATURATION CHART (fig_mx) ---
+        import plotly.graph_objects as go
+
+        fig_mx = go.Figure()
+
+        # Scheduled Maintenance (The predictable stuff)
+        fig_mx.add_trace(go.Bar(
+            x=results_df["month_name"],
+            y=results_df["nmc_sched_mean"],
+            name="Scheduled (Avg)",
+            marker_color='#3498db',
+            hovertemplate='%{y:.1f} AC'
+        ))
+        
+        # Unscheduled Maintenance (The "breaks")
+        fig_mx.add_trace(go.Bar(
+            x=results_df["month_name"],
+            y=results_df["nmc_unsch_mean"],
+            name="Unscheduled (Avg)",
+            marker_color='#e67e22',
+            hovertemplate='%{y:.1f} AC'
+        ))
+        
+        fig_mx.update_layout(
+            # Explicitly label as Fleet Average
+            title="<b>Fleet Maintenance Saturation</b> (Avg of 500 Trials)",
+            barmode='stack',
+            xaxis_title="Month",
+            yaxis_title="Avg Aircraft Offline",
+            height=400,
+            margin=dict(l=20, r=20, t=50, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            # Add a hover compare mode so they see the total at a glance
+            hovermode="x unified"
+        )
+
+         # Card Patch 2 begin
+         
+         # --- STEP 2: DISPLAY THE BRIEFING CARD ---
+        st.markdown("---")
+        st.header("⚡ Commander's Briefing Card")
+        
+        # Use a container to box the summary so it stands out
+        with st.container(border=True):
+            # Header showing the Stoplight Status
+            st.markdown(f"### Current Fleet Readiness: :{status_col}[{status_icon} {status_label}]")
+            
+            # 4-Column Metric Row
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.metric("Prob. of Success", f"{prob_success:.1%}", 
+                          delta=status_delta, 
+                          delta_color="normal" if status_col == "green" else "inverse")
+            with c2:
+                st.metric("Mean Hours", f"{mean_flown:,.0f}", delta=f"{mean_flown - FY_goal:,.0f} vs Goal")
+            with c3:
+                st.metric("Avg Fleet MC", f"{results_df['mc_rate_mean'].mean():.1%}")
+            with c4:
+                st.metric("Worst Month", worst_month_name, help=f"Lowest MC recorded: {worst_mc_val:.1%}")
+        
+            # Actionable Insight Box
+            st.info(f"**COMMANDER'S ACTION:** {status_msg}")
+        
+            # Visuals Row: Risk Matrix & Maintenance Saturation
+            v1, v2 = st.columns(2)
+            with v1:
+                # Displays the Bubble Chart we prepped in Step 1
+                st.plotly_chart(fig_risk_bubbles, use_container_width=True)
+            with v2:
+                # Displays the Maintenance Saturation Chart
+                if 'fig_mx' in locals():
+                    st.plotly_chart(fig_mx, use_container_width=True)
+                else:
+                    st.warning("Maintenance Detail Chart not found in memory.")
+        
+        st.markdown("---")
+         
         # --- MC Target vs Sim (display-only) ---
         st.subheader("🎯 MC Target vs Simulated MC")
         
@@ -971,7 +1123,7 @@ elif sim_choice == "Annual Historical Simulation":
                 mc_used = float(r.get("mc_rate", 0.0))
         
                 # Structure inputs
-                degr = int(degraders.get(m, 0))
+                degr = int(planned_degraders.get(m, 0))
                 depot = int(depot_upnr_tails.get(m, 0))
                 deploy = deployment_tails.get(m, 0)
                 tdy = tdy_tails.get(m, 0)
