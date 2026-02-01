@@ -415,17 +415,23 @@ class HistoricalAnnualSimulation(SimulationBase):
                     if flyable_ac < (pattern[0] if pattern else 1):
                         warnings.append("INSUFFICIENT ASSETS: Cannot meet Morning Go")
 
-                    # --- Section 8: Final Package ---
+                    # --- Section 8: Final Package (In simulate) ---
                     monthly.append({
                         "month": m,
-                        "nmc_sched": float(nmc_sched),  # <--- THIS IS THE MISSING LINK
-                        "nmc_unsch": float(nmc_unsch),  # Ensure this variable is also captured
+                        "nmc_sched": float(nmc_sched),
+                        "nmc_unsch": float(nmc_unsch),
                         "scheduled": scheduled,
                         "flown": flown,
                         "mc_hist": mc_hist,
                         "mc_sim": mc_sim,
                         "flyable_ac": flyable_ac,
-                        # "nmc_unsch": nmc_unsch,
+                        
+                        # --- ADD THESE LINES ---
+                        "depot": depot,      # Saving the value we used (e.g., 2)
+                        "deploy": deploy,    # Saving the value we used (e.g., 1)
+                        "tdy": tdy,          # Saving the value we used
+                        # -----------------------
+
                         "hangar_load_pct": round(hangar_load_pct * 100, 1),
                         "fixes_8hr": round(f8_count, 1),
                         "fixes_12hr": round(f12_count, 1),
@@ -450,43 +456,73 @@ class HistoricalAnnualSimulation(SimulationBase):
             return summary
 
         for idx, m in enumerate(months):
-            # --- Helper to safely grab numeric lists across all trials ---
+            # Helper to safely grab numeric lists across all trials
             def get_vector(key, default=np.nan):
                 return np.array([t[idx].get(key, default) for t in trial_results if idx < len(t)], dtype=float)
 
-            # Extract the raw data arrays
-            sched = get_vector("scheduled", 0)
-            flown = get_vector("flown", 0)
-            flyable = get_vector("flyable_ac", 0)
-            first_go = get_vector("first_go", 0)
+            # 1. CORE PERFORMANCE VECTORS
+            sched    = get_vector("scheduled", 0)
+            flown    = get_vector("flown", 0)
+            flyable  = get_vector("flyable_ac", 0)
+            days_vec = get_vector("days", 20)
             
-            # Maintenance & Stats vectors (using NaN for safety)
+            # 2. PLANNING INPUT VECTORS 
+            # CHANGE THESE to match the keys we just added to monthly.append
+            depot_vec  = get_vector("depot", 0)   # Was "planned_depot_upnr"
+            deploy_vec = get_vector("deploy", 0)  # Was "planned_deploy_tails"
+            tdy_vec    = get_vector("tdy", 0)     # Was "planned_tdy_tails"
+
+            # 3. MAINTENANCE & STATS VECTORS
             mc_sim_vec = get_vector("mc_sim")
             mc_hist_vec = get_vector("mc_hist")
-            asd_vec = get_vector("asd")
-            nmc_s = get_vector("nmc_sched", 0)
-            nmc_u = get_vector("nmc_unsch", 0)
+            asd_vec     = get_vector("asd")
+            nmc_s       = get_vector("nmc_sched", 0)
+            nmc_u       = get_vector("nmc_unsch", 0)
 
-            # Safe Vectorized Commit Pct calculation
-            commit_pct = np.divide(first_go * 100.0, flyable, out=np.full_like(flyable, np.nan), where=flyable > 0)
-            
-            # Calculate overcommit risk %
+            # 4. FIX CYCLE VECTORS
+            f8_vec   = get_vector("fixes_8hr", 0)
+            f12_vec  = get_vector("fixes_12hr", 0)
+            f24_vec  = get_vector("fixes_24hr", 0)
+            long_vec = get_vector("long_fixes", 0)
+            load_vec = get_vector("hangar_load_pct", 0)
+
+            # 5. COMMIT MATH (Daily Demand vs Daily Supply)
+            daily_req_sorties = np.divide(sched, days_vec, out=np.zeros_like(sched), where=days_vec > 0)
+            commit_pct = np.divide(daily_req_sorties * 100.0, flyable, 
+                                   out=np.zeros_like(flyable), 
+                                   where=flyable > 0)
+
             valid_commit = commit_pct[np.isfinite(commit_pct)]
             over_risk = float(np.mean(valid_commit > commit_thresh) * 100.0) if len(valid_commit) > 0 else 0.0
+            
+            # Debugging Output
+            print(f"Month {m} - Avg Flyable: {np.mean(flyable):.1f} | Avg Commit: {np.mean(valid_commit) if len(valid_commit)>0 else 0:.1f}%")
 
-            # Build the summary dictionary for this month
+            # 6. BUILD SUMMARY
             summary.append({
                 "month": m,
+                "month_name": calendar.month_abbr[m] if isinstance(m, int) else str(m),
                 "scheduled_mean": float(np.nanmean(sched)),
                 "flown_mean": float(np.nanmean(flown)),
                 "mc_sim": float(np.nanmean(mc_sim_vec)) if not np.all(np.isnan(mc_sim_vec)) else 0.0,
                 "mc_hist": float(np.nanmean(mc_hist_vec)) if not np.all(np.isnan(mc_hist_vec)) else 0.0,
                 "flyable_mean": float(np.nanmean(flyable)),
-                "commit_pct_mean": float(np.nanmean(commit_pct)) if len(valid_commit) > 0 else 0.0,
+                "commit_pct_mean": float(np.mean(valid_commit)) if len(valid_commit) > 0 else 0.0,
                 "overcommit_risk": over_risk,
                 "asd_mean": float(np.nanmean(asd_vec)) if not np.all(np.isnan(asd_vec)) else 2.0,
                 "nmc_sched_mean": float(np.nanmean(nmc_s)),
-                "nmc_unsch_mean": float(np.nanmean(nmc_u))
+                "nmc_unsch_mean": float(np.nanmean(nmc_u)),
+
+                # Map to keys the Sand Chart expects
+                "depot_mean": float(np.nanmean(depot_vec)),
+                "deployment_mean": float(np.nanmean(deploy_vec)),
+                "tdy_mean": float(np.nanmean(tdy_vec)),
+
+                "fixes_8hr_mean": float(np.nanmean(f8_vec)),
+                "fixes_12hr_mean": float(np.nanmean(f12_vec)),
+                "fixes_24hr_mean": float(np.nanmean(f24_vec)),
+                "long_fixes_mean": float(np.nanmean(long_vec)),
+                "hangar_load_pct_mean": float(np.nanmean(load_vec))
             })
 
         return summary

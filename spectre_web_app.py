@@ -1278,36 +1278,104 @@ elif sim_choice == "Annual Historical Simulation":
         fig2.update_layout(barmode="group", yaxis_title="Hours", hovermode="x unified")
         st.plotly_chart(fig2, use_container_width=True)
 
-        # --- NEW SECTION: Maintenance Recovery Visualization ---
+        # --- NEW SECTION: Maintenance Recovery Visualization (TRUE AVERAGES) ---
         st.subheader("🛠️ Maintenance Recovery & Fix Cycle")
         
-        import plotly.graph_objects as go
-
-        # Check if our fix columns exist in the trial data
-        if "fixes_8hr" in df_maintenance.columns:
+        # We use results_df because it contains the means we just added to _summarize
+        if "fixes_8hr_mean" in results_df.columns:
             fig_mx = go.Figure()
             
-            # Stacked bars for the rotation
-            fig_mx.add_trace(go.Bar(name='8hr Fix', x=df_maintenance['month_name'], y=df_maintenance['fixes_8hr'], marker_color='#2ecc71'))
-            fig_mx.add_trace(go.Bar(name='12hr Fix', x=df_maintenance['month_name'], y=df_maintenance['fixes_12hr'], marker_color='#f1c40f'))
-            fig_mx.add_trace(go.Bar(name='24hr Fix', x=df_maintenance['month_name'], y=df_maintenance['fixes_24hr'], marker_color='#e67e22'))
-            fig_mx.add_trace(go.Bar(name='Long Fix', x=df_maintenance['month_name'], y=df_maintenance['long_fixes'], marker_color='#e74c3c'))
+            fig_mx.add_trace(go.Bar(name='8hr Fix', x=results_df['month_name'], y=results_df['fixes_8hr_mean'], marker_color='#2ecc71'))
+            fig_mx.add_trace(go.Bar(name='12hr Fix', x=results_df['month_name'], y=results_df['fixes_12hr_mean'], marker_color='#f1c40f'))
+            fig_mx.add_trace(go.Bar(name='24hr Fix', x=results_df['month_name'], y=results_df['fixes_24hr_mean'], marker_color='#e67e22'))
+            fig_mx.add_trace(go.Bar(name='Long Fix', x=results_df['month_name'], y=results_df['long_fixes_mean'], marker_color='#e74c3c'))
 
             fig_mx.update_layout(
                 barmode='stack', 
-                title="Monthly Aircraft Fix Distribution (Trial 1)",
-                yaxis_title="Number of Aircraft",
+                title="Monthly Aircraft Fix Distribution (Avg of 500 Trials)",
+                yaxis_title="Avg Number of Aircraft",
                 hovermode="x unified"
             )
             st.plotly_chart(fig_mx, use_container_width=True)
             
-            # Optional: Add a metric for "Hangar Saturation"
-            avg_load = df_maintenance['hangar_load_pct'].mean()
-            st.info(f"💡 **Insight:** On average, maintenance is utilizing **{avg_load:.1f}%** of your possessed fleet daily.")
+            # Use the mean load pct we added
+            avg_load = results_df['hangar_load_pct_mean'].mean()
+            st.info(f"💡 **Insight:** Across all simulations, your hangar load averages **{avg_load:.1f}%**.")
         else:
             st.warning("Maintenance fix data (8/12/24hr) not found in simulation output. Check historical_annual.py exports.")
 
-# --- 9) Downloadable Table ---
+        # --- NEW SECTION: FLEET INVENTORY SAND CHART ---
+        st.subheader("📊 Fleet Inventory & Commit Risk")
+        
+        # --- 1. PRE-CALCULATE (Individual Categories) ---
+        flyable_ac = results_df['flyable_mean']
+        nmc_sched  = results_df['nmc_sched_mean']
+        
+        # Pull the specific means we added to _summarize
+        depot_tails   = results_df.get('depot_mean', pd.Series([0.0]*len(results_df)))
+        deploy_tails  = results_df.get('deployment_mean', pd.Series([0.0]*len(results_df)))
+        tdy_tails     = results_df.get('tdy_mean', pd.Series([0.0]*len(results_df)))
+
+        # DYNAMIC REMAINDER
+        # This math now explicitly subtracts every single known category from TAI
+        nmc_unsch = TAI - (flyable_ac + nmc_sched + depot_tails + deploy_tails + tdy_tails)
+        nmc_unsch = nmc_unsch.clip(lower=0)
+
+        # --- 2. BUILD THE FIGURE (Explicit Layers) ---
+        fig_sand = go.Figure()
+
+        # Foundation: Flyable
+        fig_sand.add_trace(go.Bar(name='Flyable (MC)', x=results_df['month_name'], y=list(flyable_ac), marker_color='#2ecc71'))
+        
+        # The 'Broken' Remainder
+        fig_sand.add_trace(go.Bar(name='Unscheduled MX', x=results_df['month_name'], y=list(nmc_unsch), marker_color='#e67e22'))
+        
+        # Planned Maintenance
+        fig_sand.add_trace(go.Bar(name='Scheduled MX', x=results_df['month_name'], y=list(nmc_sched), marker_color='#3498db'))
+        
+        # --- THE OFF-STATION SPLIT (Ensures Depot is visible) ---
+        fig_sand.add_trace(go.Bar(name='Deployment', x=results_df['month_name'], y=list(deploy_tails), marker_color='#9b59b6'))
+        fig_sand.add_trace(go.Bar(name='TDY', x=results_df['month_name'], y=list(tdy_tails), marker_color='#8e44ad'))
+        fig_sand.add_trace(go.Bar(name='Depot / UPNR', x=results_df['month_name'], y=list(depot_tails), marker_color='#95a5a6'))
+
+        # 3. OVERLAY COMMIT LINE (Secondary Axis)
+        fig_sand.add_trace(go.Scatter(
+            name='Commit Rate (%)', 
+            x=results_df['month_name'], 
+            y=results_df['commit_pct_mean'],
+            yaxis='y2', 
+            line=dict(color='#f1c40f', width=4, dash='dot'),
+            hovertemplate='%{y:.1f}%'
+        ))
+        
+        # 4. LAYOUT & THRESHOLD
+        fig_sand.update_layout(
+            barmode='stack',
+            title=f"Total Fleet Inventory Allocation (TAI: {TAI})",
+            yaxis=dict(title="Number of Aircraft", range=[0, TAI], fixedrange=True),
+            yaxis2=dict(
+                title="Commit Rate (%)",
+                overlaying='y',
+                side='right',
+                range=[0, 105], # Room for the label
+                showgrid=False
+            ),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified"
+        )
+
+        # Add Risk Threshold Line (Connected to the secondary % axis)
+        fig_sand.add_hline(
+            y=MC_target, 
+            line_dash="dot",
+            line_color="red",
+            annotation_text=f"Risk Threshold ({MC_target}%)",
+            annotation_position="top right",
+            yref="y2" 
+        )
+
+        st.plotly_chart(fig_sand, use_container_width=True)
+        # --- 9) Downloadable Table ---
         st.subheader("📋 Detailed Results Table")
         
         # Specified column order (Matches simulation output + Bridge)
