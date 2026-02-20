@@ -17,16 +17,46 @@ from datetime import date, timedelta
 MONTH_ORDER = ["Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep"]
 MONTH_DAYS  = {"Oct":31,"Nov":30,"Dec":31,"Jan":31,"Feb":28,"Mar":31,"Apr":30,"May":31,"Jun":30,"Jul":31,"Aug":31,"Sep":30}
 
-def fy26_month_to_calendar(m: str) -> tuple[int, int]:
+def fy26_month_to_calendar(month_key):
     """
-    FY26 starts Oct 2025.
-    Returns (year, month_number).
+    Accepts:
+      - "Oct", "Nov", ... (FY style)
+      - 10, 11, 12, 1..9 (int)
+      - "10", "11", ... (numeric str)
+      - "October", ... (full month name)
+    Returns (year, month_num). Year is FY26 assumption as currently designed.
     """
-    month_num = {"Oct":10,"Nov":11,"Dec":12,"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,"Jul":7,"Aug":8,"Sep":9}[m]
-    year = 2025 if m in ("Oct","Nov","Dec") else 2026
-    return year, month_num
+    # FY26 mapping assumption (Oct=2025, Jan=2026)
+    fy_map = {"Oct":10,"Nov":11,"Dec":12,"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,"Jul":7,"Aug":8,"Sep":9}
 
-from datetime import date, timedelta
+    # normalize
+    if month_key is None:
+        raise KeyError("month_key is None")
+
+    # ints
+    if isinstance(month_key, (int, np.integer)):
+        mnum = int(month_key)
+    else:
+        s = str(month_key).strip()
+
+        # numeric strings like "10"
+        if s.isdigit():
+            mnum = int(s)
+        else:
+            # try FY abbrev first
+            s3 = s[:3].title()
+            if s3 in fy_map:
+                mnum = fy_map[s3]
+            else:
+                # try full month names -> month number
+                import calendar
+                name_to_num = {name: i for i, name in enumerate(calendar.month_name) if name}
+                mnum = name_to_num.get(s.title())
+                if mnum is None:
+                    raise KeyError(s)
+
+    year = 2025 if mnum in (10, 11, 12) else 2026
+    return year, mnum
 
 def build_fly_calendar(year: int, month: int, add_one_weekend: bool = True,
                        holidays: set[date] | None = None,

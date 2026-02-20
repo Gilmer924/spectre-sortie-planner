@@ -6,252 +6,32 @@ Created on Tue Jun 24 08:59:18 2025
 """
 # simulations/historical_annual.py
 
-# import numpy as np
-# import pandas as pd
-# import math
-# import calendar
-# from simulations.simulation_base import SimulationBase
-
-# class HistoricalAnnualSimulation(SimulationBase):
-#     def validate_params(self):
-#         required = [
-#             "TAI", "rates_df", "om_days", "planned_degraders",
-#             "turn_patterns", "commit_rates", "uncertainty"
-#         ]
-#         missing = [k for k in required if k not in self.params]
-#         if missing:
-#             raise ValueError("Missing parameter(s): " + ", ".join(missing))
-
-#     def simulate(self, trials=500):
-#         self.validate_params()
-#         rates = self.params["rates_df"]
-#         TAI = self.params["TAI"]
-#         om_days = self.params["om_days"]
-#         degraders = self.params["planned_degraders"]
-#         turn_patterns = self.params["turn_patterns"]
-#         commit_rates = self.params["commit_rates"]
-#         uncertainty = float(self.params.get("uncertainty", 0.05))  # ±5% default
-#         spares_percent = self.params.get("spares_pct", 0.2)  # Default to 20%
-#         commit_thresh = self.params.get("commit_thresh", 0.8) * 100  # Default 80%
-#         months = list(range(10, 13)) + list(range(1, 10))
-#         planned_depot_upnr = self.params.get("planned_depot_upnr", {})
-#         planned_deploy_tails = self.params.get("planned_deploy_tails", {})
-#         planned_tdy_tails = self.params.get("planned_tdy_tails", {})
-#         planned_tdy_hours_per_tail = self.params.get("planned_tdy_hours_per_tail", {})
-
-#         # Monte Carlo simulation: accumulate results for each trial, each month
-#         trial_results = []
-
-#         for t in range(trials):
-#             monthly = []
-
-#             for m in months:
-#                 # --- Pull month data ---
-#                 month_rows = rates[rates["month_num"] == m]
-#                 if month_rows.empty:
-#                     monthly.append({
-#                         "month": m,
-#                         "scheduled": 0,
-#                         "flown": 0,
-#                         "mc_rate_hist": 0.0,
-#                         "mc_rate_sim": 0.0,
-#                         "execution_rate": 0.0,
-#                         "flyable_ac": 0,
-#                         "possessed_home": 0,
-#                         "nmc_sched": 0,
-#                         "nmc_unsch": 0.0,
-#                         "first_go": 0,
-#                     })
-#                     continue
-
-#                 r = month_rows.sample(1).iloc[0] if len(month_rows) > 1 else month_rows.iloc[0]
-
-#                 # -----------------------------
-#                 # HISTORICAL PERFORMANCE INPUTS
-#                 # -----------------------------
-#                 mc_hist = float(r.get("mc_rate", 0.0))
-#                 exe_rate = np.clip(
-#                     np.random.normal(float(r.get("execution_rate", 0.0)), uncertainty),
-#                     0, 1
-#                 )
-
-#                 break_rate = float(r.get("break_rate", 0.0))
-
-#                 fix8  = float(r.get("fix_rate_8hr", 0.0))
-#                 fix12 = float(r.get("fix_rate_12hr", 0.0))
-#                 fix24 = float(r.get("fix_rate_24hr", 0.0))
-
-#                 # -----------------------------
-#                 # STRUCTURE: HOME-STATION POOL
-#                 # -----------------------------
-#                 depot_upnr = int(planned_depot_upnr.get(m, 0))
-#                 deploy     = int(planned_deploy_tails.get(m, 0))
-#                 tdy        = int(planned_tdy_tails.get(m, 0))
-
-#                 possessed_home = max(0, int(TAI) - depot_upnr - deploy - tdy)
-
-#                 # -----------------------------
-#                 # PLANNED MAINTENANCE (NMC)
-#                 # -----------------------------
-#                 nmc_sched = max(0, int(degraders.get(m, 0)))
-
-#                 fix_sum = fix8 + fix12 + fix24
-#                 if fix_sum > 0:
-#                     p8, p12, p24 = fix8 / fix_sum, fix12 / fix_sum, fix24 / fix_sum
-#                     exp_fix_days = (1*p8 + 2*p12 + 3*p24)
-#                 else:
-#                     exp_fix_days = 2.0  # safe default
-
-#                 days = max(1, int(om_days.get(m, 0)))
-
-#                 pattern = [int(x) for x in str(turn_patterns[m]).split("x") if x.isdigit()]
-#                 sorties_per_day_planned = sum(pattern)
-#                 scheduled_planned = sorties_per_day_planned * days
-
-#                 monthly_breaks = scheduled_planned * break_rate
-#                 nmc_unsch = (monthly_breaks * exp_fix_days) / days
-
-#                 nmc_total = min(float(possessed_home), float(nmc_sched) + float(nmc_unsch))
-
-#                 # -----------------------------
-#                 # SIMULATED MC (THIS IS THE FIX)
-#                 # -----------------------------
-#                 mc_sim = (
-#                     (possessed_home - nmc_total) / possessed_home
-#                     if possessed_home > 0 else 0.0
-#                 )
-#                 mc_sim = float(np.clip(mc_sim, 0, 1))
-
-#                 flyable_ac = int(math.floor(possessed_home * mc_sim))
-
-#                 # -----------------------------
-#                 # SORTIE CAPACITY
-#                 # -----------------------------
-#                 first_go_planned = pattern[0] if pattern else 0
-#                 commit_cap = min(max(float(commit_rates.get(m, 0.65)), 0.0), 1.0)
-
-#                 first_go_cap = int(math.floor(flyable_ac * commit_cap))
-#                 first_go = min(first_go_planned, first_go_cap)
-
-#                 tf = (sorties_per_day_planned / first_go_planned) if first_go_planned > 0 else 0.0
-#                 sorties_per_day = int(min(sorties_per_day_planned, math.floor(first_go * tf)))
-
-#                 scheduled = sorties_per_day * days
-#                 flown = int(math.floor(scheduled * exe_rate))
-
-#                 # -----------------------------
-#                 # STORE RESULTS
-#                 # -----------------------------
-#                 monthly.append({
-#                     "month": m,
-
-#                     # Core outputs
-#                     "scheduled": scheduled,
-#                     "flown": flown,
-
-#                     # MC lines (SEPARATED, BY DESIGN)
-#                     "mc_rate_hist": mc_hist,
-#                     "mc_rate_sim": mc_sim,
-
-#                     # Structure & maintenance
-#                     "possessed_home": possessed_home,
-#                     "nmc_sched": nmc_sched,
-#                     "nmc_unsch": nmc_unsch,
-#                     "flyable_ac": flyable_ac,
-
-#                     # I added these back in
-#                     "asd": float(r.get("asd", 0.0)),
-#                     "break_rate": float(r.get("break_rate", 0.0)),
-#                     "gab_rate": float(r.get("gab_rate", 0.0)),
-#                     "spared_gab_rate": float(r.get("spared_gab_rate", 0.0)),
-
-#                     # Planning context
-#                     "first_go": first_go,
-#                     "execution_rate": exe_rate,
-#                 })
-
-#             trial_results.append(monthly)
-
-#         # Now: summarize results per month (mean, CI, etc)
-#         summary = []
-#         for idx, m in enumerate(months):
-#             sched = np.array([trial[idx]["scheduled"] for trial in trial_results], dtype=float)
-#             flown = np.array([trial[idx]["flown"] for trial in trial_results], dtype=float)
-        
-#             # New: split MC concepts
-#             mc_hist = np.array([trial[idx].get("mc_rate_hist", np.nan) for trial in trial_results], dtype=float)
-#             mc_sim  = np.array([trial[idx].get("mc_rate_sim", np.nan)  for trial in trial_results], dtype=float)
-        
-#             exe_r = np.array([trial[idx].get("execution_rate", np.nan) for trial in trial_results], dtype=float)
-        
-#             flyable = np.array([trial[idx].get("flyable_ac", 0) for trial in trial_results], dtype=float)
-        
-#             poss_home = np.array([trial[idx].get("possessed_home", 0) for trial in trial_results], dtype=float)
-#             nmc_sched = np.array([trial[idx].get("nmc_sched", 0) for trial in trial_results], dtype=float)
-#             nmc_unsch = np.array([trial[idx].get("nmc_unsch", 0) for trial in trial_results], dtype=float)
-        
-#             first_go = np.array([trial[idx].get("first_go", 0) for trial in trial_results], dtype=float)
-        
-#             # Commit percent derived (no need to store commit_pct in each trial)
-#             commit_pct = np.where(flyable > 0, (first_go / flyable) * 100.0, np.nan)
-#             overcommit_risk = float(np.nanmean(commit_pct > commit_thresh) * 100.0) if np.isfinite(commit_pct).any() else float("nan")
-
-#             asd_arr = np.array([trial[idx].get("asd", np.nan) for trial in trial_results], dtype=float)
-#             break_r = np.array([trial[idx].get("break_rate", np.nan) for trial in trial_results], dtype=float)
-#             gab_r = np.array([trial[idx].get("gab_rate", np.nan) for trial in trial_results], dtype=float)
-#             sp_gab_r = np.array([trial[idx].get("spared_gab_rate", np.nan) for trial in trial_results], dtype=float)
-
-
-#             summary.append({
-#                 "month": m,
-
-#                 "scheduled_mean": float(np.mean(sched)),
-#                 "scheduled_ci_lo": float(np.percentile(sched, 2.5)),
-#                 "scheduled_ci_hi": float(np.percentile(sched, 97.5)),
-
-#                 "flown_mean": float(np.mean(flown)),
-#                 "flown_ci_lo": float(np.percentile(flown, 2.5)),
-#                 "flown_ci_hi": float(np.percentile(flown, 97.5)),
-
-#                 # MC: historical vs simulated (this is what you wanted for the chart cleanup)
-#                 "mc_hist_mean": float(np.nanmean(mc_hist)) if np.isfinite(mc_hist).any() else float("nan"),
-#                 "mc_sim_mean":  float(np.nanmean(mc_sim))  if np.isfinite(mc_sim).any()  else float("nan"),
-
-#                 "execution_rate_mean": float(np.nanmean(exe_r)) if np.isfinite(exe_r).any() else float("nan"),
-
-#                 "possessed_home_mean": float(np.mean(poss_home)),
-#                 "flyable_mean": float(np.mean(flyable)),
-
-#                 # I added these back in as well
-#                 "asd_mean": float(np.nanmean(asd_arr)) if np.isfinite(asd_arr).any() else float("nan"),
-#                 "break_rate_mean": float(np.nanmean(break_r)) if np.isfinite(break_r).any() else float("nan"),
-#                 "gab_rate_mean": float(np.nanmean(gab_r)) if np.isfinite(gab_r).any() else float("nan"),
-#                 "spared_gab_rate_mean": float(np.nanmean(sp_gab_r)) if np.isfinite(sp_gab_r).any() else float("nan"),
-
-#                 "nmc_sched_mean": float(np.mean(nmc_sched)),
-#                 "nmc_unsch_mean": float(np.mean(nmc_unsch)),
-
-#                 "first_go_mean": float(np.mean(first_go)),
-#                 "commit_pct_mean": float(np.nanmean(commit_pct)) if np.isfinite(commit_pct).any() else float("nan"),
-#                 "overcommit_risk": overcommit_risk,
-#             })
-
-#         return trial_results, [summary]  # keep in list for compatibility
-
-#     def run(self):
-#         trials = int(self.params.get("trials", 500))
-#         return self.simulate(trials=trials)  # return trial_results only (back-compat)
-
-# simulations/historical_annual.py
-
 import numpy as np
 import pandas as pd
 import math
 import calendar
 from simulations.simulation_base import SimulationBase
+from simulations.break_fix_engine import run_month as bf2_run_month
+from simulations import break_fix_engine as bf2
+
 
 class HistoricalAnnualSimulation(SimulationBase):
+    """
+    Perform annual simulations using historical data.
+
+    This class handles the validation and execution of simulations
+    based on historical TAI and commitment rates.
+    """
+
     def validate_params(self):
+        """
+        Validate that all required simulation parameters are present.
+
+        Raises
+        ------
+        ValueError
+            If any required keys are missing from the parameters dictionary.
+        """
         required = [
             "TAI", "rates_df", "om_days", "planned_degraders",
             "turn_patterns", "commit_rates", "uncertainty"
@@ -263,9 +43,23 @@ class HistoricalAnnualSimulation(SimulationBase):
     def simulate(self, trials=500):
         self.validate_params()
         
+        ENABLE_BF2 = bool(self.safe_access(self.params, "enable_bf2", default=False))
+
+        rng = np.random.default_rng()
+
         # --- Local Variable Extraction ---
         rates = self.params["rates_df"]
         TAI = self.safe_access(self.params, "TAI", min_val=1.0)
+
+        # Use PAI/PAA as the pool BF2 runs against
+        PAA = self.safe_access(self.params, "PAA", default=None)
+        if PAA is None:
+            PAA = self.safe_access(self.params, "PAI", default=None)
+        
+        # Last-resort fallback (keeps sim running, but prefer PAA/PAI in UI)
+        if PAA is None:
+            PAA = TAI
+
         om_days = self.params["om_days"]
         degraders = self.params["planned_degraders"]
         turn_patterns = self.params["turn_patterns"]
@@ -281,15 +75,22 @@ class HistoricalAnnualSimulation(SimulationBase):
         planned_depot_upnr = self.params.get("planned_depot_upnr", {})
         planned_deploy_tails = self.params.get("planned_deploy_tails", {})
         planned_tdy_tails = self.params.get("planned_tdy_tails", {})
+        base_seed = int(self.safe_access(self.params, "seed", default=84))
+
 
         trial_results = []
 
         # Suppress numpy division warnings globally for the duration of the loop
         with np.errstate(divide='ignore', invalid='ignore'):
             for t in range(trials):
+                
+                # Deterministic per-trial RNG (so Monte Carlo varies, but is reproducible)
+                rng = np.random.default_rng(base_seed + t)
+
                 monthly = []
 
-                for m in months:
+                for m in months: # MONTH LOOP START
+                
                     # --- 1. Robust Month Matching ---
                     m_int = int(m)
                     # Convert to string to ensure we match even if types vary in the dataframe
@@ -307,7 +108,7 @@ class HistoricalAnnualSimulation(SimulationBase):
 
                     # --- 2. Historical Inputs (The "Safe" Extraction) ---
                     mc_hist = self.safe_access(r, "mc_rate", default=0.75)
-                    
+
                     # Keep Execution Rate! 
                     exe_base = self.safe_access(r, "execution_rate", default=0.95)
                     exe_rate = np.clip(np.random.normal(float(exe_base), float(uncertainty)), 0, 1)
@@ -319,10 +120,10 @@ class HistoricalAnnualSimulation(SimulationBase):
                     # --- 3. Fix Rates & Exp Fix Days (Scaled) ---
                     f8 = self.safe_access(r, "fix_rate_8hr", default=0.20)
                     f8 = f8 / 100.0 if f8 > 1.0 else f8
-                    
+
                     f12 = self.safe_access(r, "fix_rate_12hr", default=0.30)
                     f12 = f12 / 100.0 if f12 > 1.0 else f12
-                    
+
                     f24 = self.safe_access(r, "fix_rate_24hr", default=0.20)
                     f24 = f24 / 100.0 if f24 > 1.0 else f24
 
@@ -333,62 +134,60 @@ class HistoricalAnnualSimulation(SimulationBase):
                     # --- 3. Structural Availability (Corrected for self.params) ---
                     # Pull values from the dictionaries passed in self.params
                     # We use the key names defined in your web_app.py sim_params
-                    
+
                     depot   = self.safe_access(self.params.get("planned_depot_upnr", {}), m)
                     deploy  = self.safe_access(self.params.get("planned_deploy_tails", {}), m)
                     tdy     = self.safe_access(self.params.get("planned_tdy_tails", {}), m)
-                    
+
                     # This captures your "Scheduled MX Tails" from the UI
                     nmc_sched = self.safe_access(self.params.get("planned_degraders", {}), m)
-                    
+
                     # Monthly O&M Days
                     days = self.safe_access(self.params.get("om_days", {}), m, min_val=1.0)
 
                     # Calculate possessed aircraft remaining at home station
                     possessed_home = max(0.0, float(TAI) - depot - deploy - tdy)
+                    # BF2 runs against the home-station possessed pool (your PAI/PAA intent for annual)
+                    paa_home = int(round(possessed_home))
 
                     # --- REWRITTEN SECTION 4 & 5: FLOW-BASED MC LOGIC ---
-                    
+
                     # 4. Turn Pattern & Maintenance Flow
                     pattern_str = str(turn_patterns.get(m, "0"))
                     pattern = [int(x) for x in pattern_str.split("x") if x.isdigit()] or [0]
                     sorties_planned_day = sum(pattern)
-                    
+
                     # Instead of calculating NMC for the whole month, calculate the "Daily Hangar Load"
                     # nmc_unsch represents the average number of tails down for unscheduled mx on any given day.
                     # (Daily Sorties * Break Rate) = Tails entering hangar per day
                     # (Tails entering * Exp Fix Days) = Average tails staying in hangar
                     nmc_unsch = sorties_planned_day * break_rate * exp_fix_days
-                    
+
                     # Total NMC cannot exceed the tails we actually have at home
                     nmc_total = min(possessed_home, nmc_sched + nmc_unsch)
-                    
+
                     # 5. Simulated MC & Flyable (The "First Go" Capacity)
                     if possessed_home > 0:
                         # mc_sim is the percentage of possessed aircraft NOT in the hangar
                         mc_sim = (possessed_home - nmc_total) / possessed_home
                     else:
                         mc_sim = 0.0
-                    
+
                     mc_sim = float(np.clip(mc_sim, 0, 1))
-                    
+
                     # flyable_ac represents the tails ready for the Morning Go
                     flyable_ac = int(math.floor(possessed_home * mc_sim))
-                    
+
                     # 6. Sortie Capacity & Turn-Forward (RECOVERY CHECK)
                     first_go_planned = pattern[0]
                     commit_cap = np.clip(self.safe_access(commit_rates, m, default=0.65), 0, 1)
-                    
+
                     # We can only launch what we have flyable, capped by our commitment rate
                     first_go = min(first_go_planned, int(math.floor(flyable_ac * commit_cap)))
-                    
+
                     # IMPORTANT: If first_go is 0 because of a high break rate, 
                     # the sim should still show the 'Potential' if maintenance were to catch up.
                     # We ensure the scheduled math doesn't drop to zero unless flyable_ac is truly 0.
-                    tf = (sorties_planned_day / first_go_planned) if first_go_planned > 0 else 0.0
-                    scheduled = int(min(sorties_planned_day * days, math.floor(first_go * tf * days)))
-                    flown = int(math.floor(scheduled * exe_rate))
-
                     tf = (sorties_planned_day / first_go_planned) if first_go_planned > 0 else 0.0
                     scheduled = int(min(sorties_planned_day * days, math.floor(first_go * tf * days)))
                     flown = int(math.floor(scheduled * exe_rate))
@@ -416,8 +215,82 @@ class HistoricalAnnualSimulation(SimulationBase):
                         warnings.append("INSUFFICIENT ASSETS: Cannot meet Morning Go")
 
                     # --- Section 8: Final Package (In simulate) ---
+                    # Suppose bf2 is optional:
+                    # bf2_out is a dict you build earlier when you run the v2 engine, or None if disabled
+                    
+                    # --- Break/Fix v2 side-by-side (optional) ---
+                    bf2_out = {}  # ALWAYS defined, even when ENABLE_BF2 is False
+                    
+                    if ENABLE_BF2:
+                        m_int = int(m)
+                    
+                        # scheduled overhead tails for BF2 availability math
+                        sched_oh_tails = int(round(depot + deploy + tdy + nmc_sched))
+                    
+                        # calendar days in month (BF2 uses fly calendar internally)
+                        year_for_month = 2025 if m_int in (10, 11, 12) else 2026
+                        cal_days = calendar.monthrange(year_for_month, m_int)[1]
+                    
+                        # BF2 expects FY-style month key like "Oct"
+                        month_key_bf2 = calendar.month_abbr[m_int]  # 10 -> "Oct"
+                    
+                        # attempted sorties for BF2: use annual UI goal first, then rates fallback
+                        attempted_sorties_month = int(round(self.safe_access(self.params.get("sortie_goal", {}), m, default=0)))
+                        if attempted_sorties_month <= 0:
+                            attempted_sorties_month = int(round(self.safe_access(r, "sorties_scheduled", default=0)))
+                    
+                        # attrition is (1 - execution)
+                        attrition_rate = float(1.0 - exe_rate)
+                    
+                        # normalize fix probabilities for BF2 gates (must sum to 1 when breaks occur)
+                        fix_total = float(f8 + f12 + f24)
+                        if fix_total > 1e-9:
+                            fix_p1, fix_p2, fix_p3 = float(f8 / fix_total), float(f12 / fix_total), float(f24 / fix_total)
+                        else:
+                            fix_p1, fix_p2, fix_p3 = 1.0, 0.0, 0.0
+                    
+                        # commit_rate source: you already have commit_rates by month in this sim
+                        commit_rate_bf2 = float(np.clip(self.safe_access(commit_rates, m, default=0.65), 0, 1))
+                    
+                        ledger, _, _ = bf2.run_month(
+                            rng=rng,
+                            month_key=month_key_bf2,
+                            days=int(cal_days),
+                            paa=int(round(paa_home)),                 # BF2 runs vs home possessed pool
+                            commit_rate=commit_rate_bf2,
+                            scheduled_overhead_tails=sched_oh_tails,
+                            om_days=int(round(days)),                 # OM days (your existing annual logic)
+                            attempted_sorties_month=attempted_sorties_month,
+                            attrition_rate=attrition_rate,
+                            break_rate_per_executed=float(break_rate),
+                            ga_rate_per_attempt=0.0,                  # TODO wire later
+                            p_ga_spared=1.0,                          # TODO wire later
+                            fix_p1=fix_p1, fix_p2=fix_p2, fix_p3=fix_p3,
+                            r1=0, r2=0, r3=0, rL=0,
+                            print_days=False,
+                        )
+                    
+                        # Store BF2 outputs (monthly)
+                        bf2_out = {
+                            "bf2_gate_1d": float(ledger.get("gate_1d", 0.0)),
+                            "bf2_gate_2d": float(ledger.get("gate_2d", 0.0)),
+                            "bf2_gate_3d": float(ledger.get("gate_3d", 0.0)),
+                            "bf2_gate_long": float(ledger.get("gate_long", 0.0)),
+                            "bf2_peak_unsched_down": float(ledger.get("peak_unsched_down", 0.0)),
+                            "bf2_shortfall_days": float(ledger.get("shortfall_days", 0.0)),
+                            "bf2_attempted_sorties": float(ledger.get("attempted_sorties", 0.0)),
+                            "bf2_executed_sorties": float(ledger.get("executed_sorties", 0.0)),
+                            "bf2_breaks_in": float(ledger.get("breaks_in", 0.0)),
+                            "bf2_spares_reserved": float(ledger.get("spares_reserved", 0.0)),
+                            "bf2_spare_shortfall_events": float(ledger.get("spare_shortfall_events", 0.0)),
+                            "bf2_ga_not_spared": float(ledger.get("ga_not_spared", 0.0)),
+                            "bf2_hangar_load_pct": (float(ledger.get("peak_unsched_down", 0.0)) / max(1.0, float(paa_home))) * 100.0,
+                        }
+
                     monthly.append({
+                        # --- existing keys ---
                         "month": m,
+                        "days": float(days),
                         "nmc_sched": float(nmc_sched),
                         "nmc_unsch": float(nmc_unsch),
                         "scheduled": scheduled,
@@ -425,19 +298,31 @@ class HistoricalAnnualSimulation(SimulationBase):
                         "mc_hist": mc_hist,
                         "mc_sim": mc_sim,
                         "flyable_ac": flyable_ac,
-                        
-                        # --- ADD THESE LINES ---
-                        "depot": depot,      # Saving the value we used (e.g., 2)
-                        "deploy": deploy,    # Saving the value we used (e.g., 1)
-                        "tdy": tdy,          # Saving the value we used
-                        # -----------------------
-
+                        "depot": depot,
+                        "deploy": deploy,
+                        "tdy": tdy,
+                    
+                        # --- BF1 / current (already in your file) ---
                         "hangar_load_pct": round(hangar_load_pct * 100, 1),
                         "fixes_8hr": round(f8_count, 1),
                         "fixes_12hr": round(f12_count, 1),
                         "fixes_24hr": round(f24_count, 1),
                         "long_fixes": round(long_fixes, 1),
-                        "warnings": " | ".join(warnings) if warnings else "Healthy"
+                        
+                        # --- BF2 / side-by-side outputs ---
+                        "bf2_gate_1d": bf2_out.get("bf2_gate_1d", 0.0),
+                        "bf2_gate_2d": bf2_out.get("bf2_gate_2d", 0.0),
+                        "bf2_gate_3d": bf2_out.get("bf2_gate_3d", 0.0),
+                        "bf2_gate_long": bf2_out.get("bf2_gate_long", 0.0),
+                        "bf2_peak_unsched_down": bf2_out.get("bf2_peak_unsched_down", 0.0),
+                        "bf2_shortfall_days": bf2_out.get("bf2_shortfall_days", 0.0),
+                        "bf2_attempted_sorties": bf2_out.get("bf2_attempted_sorties", 0.0),
+                        "bf2_executed_sorties": bf2_out.get("bf2_executed_sorties", 0.0),
+                        "bf2_breaks_in": bf2_out.get("bf2_breaks_in", 0.0),
+                        "bf2_spares_reserved": bf2_out.get("bf2_spares_reserved", 0.0),
+                        "bf2_spare_shortfall_events": bf2_out.get("bf2_spare_shortfall_events", 0.0),
+                        "bf2_ga_not_spared": bf2_out.get("bf2_ga_not_spared", 0.0),
+
                     })
 
                 trial_results.append(monthly)
@@ -485,8 +370,17 @@ class HistoricalAnnualSimulation(SimulationBase):
             f24_vec  = get_vector("fixes_24hr", 0)
             long_vec = get_vector("long_fixes", 0)
             load_vec = get_vector("hangar_load_pct", 0)
+            
+            bf2_g1_vec   = get_vector("bf2_gate_1d", 0)
+            bf2_g2_vec   = get_vector("bf2_gate_2d", 0)
+            bf2_g3_vec   = get_vector("bf2_gate_3d", 0)
+            bf2_gl_vec   = get_vector("bf2_gate_long", 0)
+            bf2_peak_vec = get_vector("bf2_peak_unsched_down", 0)
+            bf2_sf_vec   = get_vector("bf2_shortfall_days", 0)
+            bf2_sp_vec   = get_vector("bf2_spares_reserved", 0)
 
-            # 5. COMMIT MATH (Daily Demand vs Daily Supply)
+
+            # 6. COMMIT MATH (Daily Demand vs Daily Supply)
             daily_req_sorties = np.divide(sched, days_vec, out=np.zeros_like(sched), where=days_vec > 0)
             commit_pct = np.divide(daily_req_sorties * 100.0, flyable, 
                                    out=np.zeros_like(flyable), 
@@ -494,9 +388,9 @@ class HistoricalAnnualSimulation(SimulationBase):
 
             valid_commit = commit_pct[np.isfinite(commit_pct)]
             over_risk = float(np.mean(valid_commit > commit_thresh) * 100.0) if len(valid_commit) > 0 else 0.0
-            
+
             # Debugging Output
-            print(f"Month {m} - Avg Flyable: {np.mean(flyable):.1f} | Avg Commit: {np.mean(valid_commit) if len(valid_commit)>0 else 0:.1f}%")
+            #print(f"Month {m} - Avg Flyable: {np.mean(flyable):.1f} | Avg Commit: {np.mean(valid_commit) if len(valid_commit)>0 else 0:.1f}%")
 
             # 6. BUILD SUMMARY
             summary.append({
@@ -506,7 +400,7 @@ class HistoricalAnnualSimulation(SimulationBase):
                 "flown_mean": float(np.nanmean(flown)),
                 "mc_sim": float(np.nanmean(mc_sim_vec)) if not np.all(np.isnan(mc_sim_vec)) else 0.0,
                 "mc_hist": float(np.nanmean(mc_hist_vec)) if not np.all(np.isnan(mc_hist_vec)) else 0.0,
-                "flyable_mean": float(np.nanmean(flyable)),
+                "avg_flyable": float(np.nanmean(flyable)),
                 "commit_pct_mean": float(np.mean(valid_commit)) if len(valid_commit) > 0 else 0.0,
                 "overcommit_risk": over_risk,
                 "asd_mean": float(np.nanmean(asd_vec)) if not np.all(np.isnan(asd_vec)) else 2.0,
@@ -522,11 +416,32 @@ class HistoricalAnnualSimulation(SimulationBase):
                 "fixes_12hr_mean": float(np.nanmean(f12_vec)),
                 "fixes_24hr_mean": float(np.nanmean(f24_vec)),
                 "long_fixes_mean": float(np.nanmean(long_vec)),
-                "hangar_load_pct_mean": float(np.nanmean(load_vec))
+                "hangar_load_pct_mean": float(np.nanmean(load_vec)),
+
+                "bf2_gate_1d_mean": float(np.nanmean(bf2_g1_vec)),
+                "bf2_gate_2d_mean": float(np.nanmean(bf2_g2_vec)),
+                "bf2_gate_3d_mean": float(np.nanmean(bf2_g3_vec)),
+                "bf2_gate_long_mean": float(np.nanmean(bf2_gl_vec)),
+                "bf2_peak_unsched_down_mean": float(np.nanmean(bf2_peak_vec)),
+                "bf2_shortfall_days_mean": float(np.nanmean(bf2_sf_vec)),
+                "bf2_spares_reserved_mean": float(np.nanmean(bf2_sp_vec)),
+
             })
 
         return summary
 
     def run(self):
-        trials = int(self.params.get("trials", 500))
-        return self.simulate(trials=trials)
+            """
+            Run the simulation trials.
+    
+            Parameters
+            ----------
+            None
+    
+            Returns
+            -------
+            results : dict
+                The output of the simulation.
+            """
+            trials = int(self.params.get("trials", 500))
+            return self.simulate(trials=trials)
