@@ -18,7 +18,10 @@ from io import BytesIO
 from PIL import Image
 # RIM / North Star projection engine
 from simulations.rim_projection import RIMProjectionInputs, project_rim_as_dicts
-# from simulations.rim_requirements import compute_crew_aircraft_requirement
+
+# Personnel simulation helper import
+from simulations.personnel_simulation import workcenters_to_template_df, template_df_to_workcenters
+
 
 
 # ---------- Turn Factor Helpers ----------
@@ -428,24 +431,32 @@ if sim_choice == "Weekly Simulation":
 
 # ---------- PERSONNEL SIMULATION ----------
 elif sim_choice == "Personnel Simulation":
-    import calendar, pandas as pd, numpy as np
-    from collections import Counter
+    import plotly.graph_objects as go
+
     st.header("👥 Personnel Capacity Simulation")
 
     # — Sidebar Basic Params —
-    TAI    = st.sidebar.number_input("TAI (# Aircraft)", value=28, step=1)
+    TAI    = st.sidebar.number_input("TAI (# Aircraft)", value=12, step=1)
     shifts = st.sidebar.number_input("Shifts", min_value=1, max_value=10, value=1, step=1)
     lps    = st.sidebar.number_input("Labor Hrs/Sortie", value=10.0)
-    TrialsP= st.sidebar.slider("Monte Carlo Trials", 1, 5000, 500)
+    TrialsP = 500
 
-    # — Timeframe + Goals —
-    mode = st.radio("Timeframe", ["Full FY", "Single Month"])
+    # --- Timeframe is locked to Full FY for normal users ---
+    mode = "Full FY"
+    
+    # Optional: debug-only toggle (OFF by default)
+    DEBUG_SINGLE_MONTH = True  # <-- set True only when you want to test
+    
+    if DEBUG_SINGLE_MONTH:
+        with st.expander("Advanced: Single Month (debug only)"):
+            if st.checkbox("Enable Single Month Mode", value=False, key="dbg_single_month_toggle"):
+                mode = "Single Month"
     
     if mode == "Full FY":
         months = list(range(1, 13))
         month_names = [calendar.month_abbr[m] for m in months]
         default_om = [20] * 12
-        default_goals = [0] * 12
+        default_goals = [80] * 12
     
         planning_df = pd.DataFrame({
             "Month": month_names,
@@ -463,185 +474,406 @@ elif sim_choice == "Personnel Simulation":
             )
         om_days = {i+1: int(edited_plan.loc[i, "O&M Days"]) for i in range(12)}
         month_goals = {i+1: int(edited_plan.loc[i, "Goal Sorties"]) for i in range(12)}
-        months = list(range(1, 13))
+        sim_months_list = list(range(1, 13))
     
     else:
         st.subheader("O&M Days & Goal — Single Month")
         month = st.selectbox("Month", list(range(1,13)))
         om_days     = {month: st.number_input("O&M days", value=20, min_value=0)}
         month_goals = {month: st.number_input("Sortie goal", value=0, min_value=0)}
-        months = [month]
+        sim_months_list = [month]
+
+    st.subheader("🗓️ Monthly Personnel Status (Planned Absences)")
+    st.caption("Adjust percentages by month to account for leave surges, TDYs, or 'Out-of-Hide' support tasks.")
+    
+    # Create the planning dataframe for personnel drains
+    drain_months = [calendar.month_abbr[m] for m in sim_months_list]
+    drain_df = pd.DataFrame({
+        "Month": drain_months,
+        "Leave %": [10] * len(drain_months),
+        "TDY %": [5] * len(drain_months),
+        "Out-of-Hide %": [10] * len(drain_months),  # CTK, CSS, support tasks
+        "Deploy %": [2] * len(drain_months)
+    })
+    
+    edited_drain = st.data_editor(
+        drain_df,
+        use_container_width=True,
+        hide_index=True,
+        key="monthly_drain_matrix"
+    )
+    
+    # Convert edited data into a lookup dictionary for the simulation
+    monthly_drain_map = {}
+    for i, m in enumerate(sim_months_list):
+        monthly_drain_map[m] = {
+            "leave": float(edited_drain.loc[i, "Leave %"]) / 100.0,
+            "tdy": float(edited_drain.loc[i, "TDY %"]) / 100.0,
+            "deploy": float(edited_drain.loc[i, "Deploy %"]) / 100.0,
+            "oom": float(edited_drain.loc[i, "Out-of-Hide %"]) / 100.0,
+        }
+        
+    # --- New Calculations for the Results Table ---
+    # Inside your simulation loop (or when processing results), calculate:
+    # assigned_total = sum(all_asgn)
+    # auth_total = sum(all_auth)
+    # manning_v_auth = (assigned_total / auth_total) if auth_total > 0 else 0
 
     # — Absence & UTE Rates —
     st.subheader("Absence & Skill Factors")
-    c1,c2,c3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
+    
     with c1:
-        leave = st.number_input("Leave rate", value=0.10, min_value=0.0, max_value=1.0)
-        tdy   = st.number_input("TDY rate",   value=0.05, min_value=0.0, max_value=1.0)
+        # We define these here so they are always available to the button below
+        leave_rate_input = st.number_input("Leave rate", value=0.10, min_value=0.0, max_value=1.0)
+        tdy_rate_input   = st.number_input("TDY rate",   value=0.05, min_value=0.0, max_value=1.0)
     with c2:
-        deploy= st.number_input("Deploy rate", value=0.02, min_value=0.0, max_value=1.0)
+        deploy_rate_input = st.number_input("Deploy rate", value=0.02, min_value=0.0, max_value=1.0)
     with c3:
         st.caption("👩‍💻 UTE (hrs/day) per skill level")
-        ute3  = st.number_input("3-lvl UTE", value=0.25)
-        ute5  = st.number_input("5-lvl UTE", value=0.50)
-        ute7  = st.number_input("7-lvl UTE", value=1.00)
+        # THESE ARE THE CRITICAL DEFINITIONS
+        ute3 = st.number_input("3-lvl UTE", value=0.25)
+        ute5 = st.number_input("5-lvl UTE", value=0.50)
+        ute7 = st.number_input("7-lvl UTE", value=0.90)
 
-    # — Workcenters Manual Editor —
     st.subheader("Workcenters (Authorized vs Assigned)")
-    n_wcs = st.number_input("How many workcenters?", min_value=1, max_value=20, value=1, step=1)
-    wc_list = []
-    for i in range(n_wcs):
-        st.markdown(f"**Workcenter #{i+1}**")
-        cols = st.columns([2,1,1,1,1,1,1])
-        shop  = cols[0].text_input(f"Shop name #{i+1}", key=f"wc_shop_{i}")
-        a3    = cols[1].number_input(f"Auth 3-lvl", key=f"wc_auth3_{i}", min_value=0.0, value=0.0)
-        a5    = cols[2].number_input(f"Auth 5-lvl", key=f"wc_auth5_{i}", min_value=0.0, value=0.0)
-        a7    = cols[3].number_input(f"Auth 7-lvl", key=f"wc_auth7_{i}", min_value=0.0, value=0.0)
-        s3    = cols[4].number_input(f"Asgn 3-lvl", key=f"wc_asn3_{i}", min_value=0.0, value=0.0)
-        s5    = cols[5].number_input(f"Asgn 5-lvl", key=f"wc_asn5_{i}", min_value=0.0, value=0.0)
-        s7    = cols[6].number_input(f"Asgn 7-lvl", key=f"wc_asn7_{i}", min_value=0.0, value=0.0)
-        wc_list.append({
-            "shop": shop.strip(),
-            "asn":  {"3": s3, "5": s5, "7": s7},
-            "auth": {"3": a3, "5": a5, "7": a7},
-        })
 
-    # build the final dict for the backend
+    # --- Template download/upload ---
+    template_df = pd.DataFrame([
+        {"shop": s, "auth_3":0, "auth_5":0, "auth_7":0, "asgn_3":0, "asgn_5":0, "asgn_7":0}
+        for s in ["Avionics", "Crew Chiefs", "Engines", "Electrics", "Sheet Metal", "Age", "NDI", "CTK", "Life Support"]
+    ])
+    
+    st.download_button(
+        "⬇️ Download Workcenter Template (CSV)",
+        data=template_df.to_csv(index=False).encode("utf-8"),
+        file_name="spectre_workcenters_template.csv",
+        mime="text/csv",
+    )
+    
+    # --- Upload (Primary Method) ---
+    uploaded_wc = st.file_uploader(
+        "📤 Upload Workcenter Template (CSV or XLSX)",
+        type=["csv", "xlsx"],
+        key="upl_wc_template_personnel",
+    )
+    
+    uploaded_df = None
+    
+    if uploaded_wc is not None:
+        try:
+            if uploaded_wc.name.lower().endswith(".csv"):
+                uploaded_df = pd.read_csv(uploaded_wc)
+            else:
+                uploaded_df = pd.read_excel(uploaded_wc)
+    
+            uploaded_df.columns = [c.strip().lower() for c in uploaded_df.columns]
+            st.success(f"Loaded {len(uploaded_df)} workcenters from template.")
+            st.dataframe(uploaded_df, use_container_width=True)
+    
+        except Exception as e:
+            st.error(f"Could not read uploaded file: {e}")
+            uploaded_df = None
+    
+    
+    # --- Optional Manual Fallback (Hidden by Default) ---
+    allow_manual = st.checkbox(
+        "Manually enter workcenters (backup method)",
+        value=False,
+        key="personnel_allow_manual",
+    )
+    
+    wc_list = []
+    
+    if uploaded_df is not None and not uploaded_df.empty:
+        for _, r in uploaded_df.iterrows():
+            shop = str(r.get("shop", "")).strip()
+            if shop:
+                wc_list.append({
+                    "shop": shop,
+                    "asn": {
+                        "3": float(r.get("asgn_3", 0)),
+                        "5": float(r.get("asgn_5", 0)),
+                        "7": float(r.get("asgn_7", 0)),
+                    },
+                    "auth": {
+                        "3": float(r.get("auth_3", 0)),
+                        "5": float(r.get("auth_5", 0)),
+                        "7": float(r.get("auth_7", 0)),
+                    },
+                })
+    
+    elif allow_manual:
+        n_wcs = st.number_input("How many workcenters?", 1, 50, 5, key="personnel_n_wcs")
+    
+        for i in range(n_wcs):
+            st.markdown(f"**Workcenter #{i+1}**")
+            cols = st.columns([2, 1, 1, 1, 1, 1, 1])
+    
+            shop = cols[0].text_input("Shop", key=f"personnel_wc_shop_{i}")
+    
+            a3 = cols[1].number_input("A3", min_value=0.0, value=0.0, key=f"personnel_wc_a3_{i}")
+            a5 = cols[2].number_input("A5", min_value=0.0, value=0.0, key=f"personnel_wc_a5_{i}")
+            a7 = cols[3].number_input("A7", min_value=0.0, value=0.0, key=f"personnel_wc_a7_{i}")
+    
+            s3 = cols[4].number_input("S3", min_value=0.0, value=0.0, key=f"personnel_wc_s3_{i}")
+            s5 = cols[5].number_input("S5", min_value=0.0, value=0.0, key=f"personnel_wc_s5_{i}")
+            s7 = cols[6].number_input("S7", min_value=0.0, value=0.0, key=f"personnel_wc_s7_{i}")
+    
+            if shop.strip():
+                wc_list.append({
+                    "shop": shop.strip(),
+                    "asn": {"3": s3, "5": s5, "7": s7},
+                    "auth": {"3": a3, "5": a5, "7": a7},
+                })
+    
+    else:
+        st.info("Upload a workcenter template to proceed (or enable manual entry).")
+
+    auth_workcenters = {
+        wc["shop"]: wc["auth"]
+        for wc in wc_list
+        if sum(wc["auth"].values()) > 0
+    }
+
     workcenters = {
         wc["shop"]: wc["asn"]
         for wc in wc_list
-        if wc["shop"] and sum(wc["asn"].values()) > 0
+        if sum(wc["asn"].values()) > 0 or sum(wc["auth"].values()) > 0
     }
-
+    
     # — Run Simulation —
     if st.button("Run Personnel Simulation"):
-        params = {
-            "TAI":                    TAI,
-            "months":                 months,
-            "om_days":                om_days,
-            "month_goals":            month_goals,
-            "leave_rate":             leave,
-            "tdy_rate":               tdy,
-            "deploy_rate":            deploy,
-            "ute_rates":              {"3": ute3, "5": ute5, "7": ute7},
-            "labor_hours_per_sortie": lps,
-            "workcenters":            workcenters,
+        # 1. Capture Authorized counts from your wc_list (the data you just entered/uploaded)
+        # This solves the "left out" logic for assigned_total and auth_total
+        auth_workcenters = {
+            wc["shop"]: wc["auth"] 
+            for wc in wc_list 
+            if wc["shop"] and sum(wc["auth"].values()) > 0
         }
+
+        # 2. Bundle the UTE rates (Ensures they are defined for the backend)
+        ute_dict = {"3": ute3, "5": ute5, "7": ute7}
+
+        # 2. Build the final parameter package
+        params = {
+            "TAI": TAI,
+            "months": sim_months_list,
+            "om_days": om_days,
+            "month_goals": month_goals,
+            "ute_rates": ute_dict,
+            "labor_hours_per_sortie": lps,
+            "workcenters": workcenters,
+            "auth_workcenters": auth_workcenters,
+            "monthly_drain": monthly_drain_map,
+        
+            # ✅ Global fallback rates (satisfies validation + covers months not in monthly_drain)
+            "leave_rate": float(leave_rate_input),
+            "tdy_rate": float(tdy_rate_input),
+            "deploy_rate": float(deploy_rate_input),
+        }
+
+        # 3. Execute the refactored simulation
         per_results = run_personnel_simulation(params, trials=TrialsP)
-
-        # 1) Main summary DataFrame (first trial)
+        
+        # 4. Process the results for the frontend
+        # We use trial 0 for the main display table
         df_per = pd.DataFrame(per_results[0]).set_index("month")
+        
+        # Ensure FY Order (Oct -> Sep)
+        fy_order = [10, 11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        months_fy = [m for m in fy_order if m in df_per.index]
+        df_per_fy = df_per.loc[months_fy].copy()
+        
+        # Save to session state
+        st.session_state["personnel_results"] = per_results
+        st.session_state["personnel_df"] = pd.DataFrame(per_results[0]).set_index("month")
+        st.session_state["personnel_month_goals"] = month_goals
+        st.session_state["personnel_sim_months"] = sim_months_list
+        
+        st.success("✅ Results updated with Manning Health metrics!")
 
-        skill_levels = ["3", "5", "7"]
-        for lvl in skill_levels:
-            ratio_col = f"ppl_per_ac_{lvl}"
-            df_per[ratio_col] = [
-                sum(wc.get(lvl, 0) for wc in workcenters.values()) / TAI
-                for _ in df_per.index
-            ]
-        show_cols = [
-            "present_people", "available_hours", "sorties_supported",
-            "ppl_per_ac", "shifts_supported", "shortfall",
-            "limiting_shop", "limiting_shop_sorties",
-            "ppl_per_ac_3", "ppl_per_ac_5", "ppl_per_ac_7"
-        ]
-        st.success("✅ Simulation complete!")
-        st.write("### Monthly Summary (including bottlenecks & shortfalls)")
-        st.dataframe(df_per[show_cols])
-
-        # 2) Alert for each bottleneck/shortfall (per month)
-        st.subheader("⚠️ Bottleneck Alerts")
-        for m, row in df_per.iterrows():
-            if row.get("shortfall", False):
-                st.warning(
-                    f"{calendar.month_abbr[m]} shortfall: "
-                    f"Bottleneck = {row['limiting_shop'] or 'N/A'} "
-                    f"(can only support {row['limiting_shop_sorties']:.1f} sorties)"
-                )
-
-        # 3) Frequency of bottleneck shop across all trials (first month as example)
-        if TrialsP > 1:
-            st.subheader("🔍 Bottleneck Frequency (Monte Carlo)")
-            all_bottlenecks = Counter(
-                trial[0].get("limiting_shop", "") for trial in per_results if trial[0].get("shortfall", False)
-            )
-            if all_bottlenecks:
-                most_common = all_bottlenecks.most_common(1)[0]
-                st.info(
-                    f"Most common bottleneck for {calendar.month_abbr[months[0]]}: "
-                    f"{most_common[0]} ({most_common[1]} out of {TrialsP} trials)"
-                )
-
-        # 4) Supported vs Goal plot
-        months_list = df_per.index.tolist()
-        supported = df_per["sorties_supported"].tolist()
-        goals = [month_goals.get(m,0) for m in months_list]
-        import plotly.graph_objects as go
-        fig1 = go.Figure()
-        fig1.add_trace(go.Scatter(x=months_list, y=supported, mode="lines+markers", name="Supported"))
-        fig1.add_trace(go.Scatter(x=months_list, y=goals, mode="lines+markers", name="Goal"))
-        # 5) Annotate shortfall months
-        shortfall_months = [m for m, row in df_per.iterrows() if row["shortfall"]]
-        fig1.add_trace(go.Scatter(
-            x=shortfall_months,
-            y=[df_per.loc[m, "sorties_supported"] for m in shortfall_months],
-            mode="markers",
-            marker=dict(color="red", size=10),
-            name="Shortfall"
-        ))
-        fig1.update_layout(
-            title="Monthly Sorties Supported vs Goal (Shortfalls in Red)",
+    # ---------- RESULTS / VISUALS (OUTSIDE THE BUTTON) ----------
+    if "personnel_df" in st.session_state and "personnel_results" in st.session_state:
+        df_out = st.session_state["personnel_df"]
+        per_results = st.session_state["personnel_results"]
+        month_goals_cached = st.session_state.get("personnel_month_goals", {})
+        sim_months = st.session_state.get("personnel_sim_months", df_out.index.tolist())
+    
+        months_list = df_out.index.tolist()  # FY ordered if you stored df_per_fy
+        month_labels = [calendar.month_abbr[m] for m in months_list]
+    
+        # ---- Helpers ----
+        def _col_ok(col: str) -> bool:
+            return col in df_out.columns
+    
+        def _safe_cols(cols):
+            return [c for c in cols if c in df_out.columns]
+    
+        # Build month -> sim index map so FY view still pulls correct sim month
+        month_to_sim_idx = {m: i for i, m in enumerate(sim_months)}
+    
+        # --- 1) TOP LEVEL METRIC CARDS ---
+        st.write("### 🎖️ Personnel Health Summary")
+        c1, c2, c3 = st.columns(3)
+    
+        avg_health = df_out["manning_health"].mean() if _col_ok("manning_health") else 0.0
+    
+        if _col_ok("wrench_turners") and _col_ok("assigned_total") and df_out["assigned_total"].sum() > 0:
+            avg_ready = df_out["wrench_turners"].sum() / df_out["assigned_total"].sum()
+        else:
+            avg_ready = 0.0
+    
+        avg_sorties = df_out["sorties_supported"].mean() if _col_ok("sorties_supported") else 0.0
+    
+        c1.metric("Manning Health", f"{avg_health:.1%}", help="Assigned vs Authorized")
+        c2.metric("Mission-Ready Rate", f"{avg_ready:.1%}", help="Effective wrench-turners after leave and noise")
+        c3.metric("Avg Sorties/Mo", f"{avg_sorties:.1f}")
+    
+        # --- 2) THE MANNING FUNNEL ---
+        st.subheader("📊 The Manning Funnel: Auth vs. Asgn vs. Ready")
+    
+        fig_funnel = go.Figure()
+    
+        if _col_ok("assigned_total"):
+            fig_funnel.add_trace(go.Bar(
+                x=month_labels, y=df_out["assigned_total"],
+                name="Total Assigned", marker_color="lightgray"
+            ))
+    
+        if _col_ok("wrench_turners"):
+            fig_funnel.add_trace(go.Bar(
+                x=month_labels, y=df_out["wrench_turners"],
+                name="Effective Wrench Turners", marker_color="#2ecc71"
+            ))
+    
+        if _col_ok("auth_total"):
+            fig_funnel.add_trace(go.Scatter(
+                x=month_labels, y=df_out["auth_total"],
+                name="Authorized Strength", line=dict(color="#e74c3c", dash="dash", width=3)
+            ))
+    
+        fig_funnel.update_layout(
+            barmode="overlay",
+            title="Personnel Availability (Accounting for Noise & Absences)",
             xaxis_title="Month",
-            yaxis_title="Sorties",
-            xaxis=dict(tickmode="array", tickvals=months_list)
+            yaxis_title="Personnel Count",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-        st.plotly_chart(fig1, use_container_width=True)
-
-        # 6) Histogram for MC >1
-        if TrialsP > 1:
-            all_months = list(zip(*[
-                [trial[m]["sorties_supported"] for m in range(len(months_list))]
-                for trial in per_results
-            ]))
-            st.subheader("📊 Monte Carlo Distribution (First Month)")
-            fig2 = go.Figure()
-            fig2.add_trace(go.Histogram(x=all_months[0], nbinsx=20, name=f"Month {months_list[0]}"))
+        st.plotly_chart(fig_funnel, use_container_width=True, key="personnel_funnel_main")
+    
+        # --- 3) BOTTLENECK ALERTS ---
+        st.subheader("⚠️ Bottleneck Alerts")
+        if _col_ok("shortfall"):
+            shortfalls = df_out[df_out["shortfall"] == True]
+            if not shortfalls.empty:
+                for m, row in shortfalls.iterrows():
+                    lim_val = row.get("limiting_shop_sorties")
+                    lim_txt = f"{lim_val:.1f}" if isinstance(lim_val, (int, float)) else "N/A"
+                    st.warning(
+                        f"**{calendar.month_abbr[m]}**: Limited by **{row.get('limiting_shop','N/A')}** "
+                        f"({lim_txt} sorties supported)"
+                    )
+            else:
+                st.info("No shortfalls detected in the FY view.")
+        else:
+            st.info("Shortfall logic not present in output (no alerts to display).")
+    
+        # --- 4) DATA TABLE ---
+        with st.expander("📄 View Detailed Monthly Data Table"):
+            show_cols = _safe_cols([
+                "auth_total", "assigned_total", "manning_health",
+                "present_people", "wrench_turners",
+                "available_hours", "sorties_supported",
+                "shortfall", "limiting_shop", "limiting_shop_sorties",
+                "ppl_per_ac",
+            ])
+            if show_cols:
+                st.dataframe(df_out[show_cols], use_container_width=True)
+            else:
+                st.info("No recognized columns to display yet.")
+    
+        # --- 5) TRENDS & HEATMAP ---
+        col_l, col_r = st.columns(2)
+    
+        with col_l:
+            if _col_ok("sorties_supported"):
+                fig1 = go.Figure()
+                fig1.add_trace(go.Scatter(
+                    x=month_labels, y=df_out["sorties_supported"],
+                    mode="lines+markers", name="Supported"
+                ))
+                fig1.add_trace(go.Scatter(
+                    x=month_labels,
+                    y=[month_goals_cached.get(m, 0) for m in months_list],
+                    mode="lines+markers", name="Goal", line=dict(dash="dash")
+                ))
+                fig1.update_layout(title="Sortie Trend (FY Order)", xaxis_title="Month", yaxis_title="Sorties")
+                st.plotly_chart(fig1, use_container_width=True, key="personnel_sortie_trend")
+            else:
+                st.info("No sorties_supported column available for trend chart.")
+    
+        with col_r:
+            # Heatmap uses shop_details returned from the sim (per_results[0])
+            # Use shops from the first month that contains shop_details, so we don't depend on 'workcenters' variable.
+            first_with_details = next((item for item in (per_results[0] if per_results else []) if "shop_details" in item), None)
+            shops = sorted((first_with_details.get("shop_details", {}).keys() if first_with_details else []))
+    
+            if shops:
+                heatmap_data = []
+                for shop in shops:
+                    row_util = []
+                    for m in months_list:
+                        # Find matching month in the first trial
+                        m_data = next((item for item in per_results[0] if item.get("month") == m), None)
+                        if m_data and "shop_details" in m_data:
+                            detail = m_data["shop_details"].get(shop, {})
+                            hrs_avail = float(detail.get("hrs_avail", 0.0))
+                            hrs_req = float(detail.get("hrs_req", 0.0))
+                            util = (hrs_req / hrs_avail * 100.0) if hrs_avail > 0 else 0.0
+                            row_util.append(round(util, 1))
+                        else:
+                            row_util.append(0.0)
+                    heatmap_data.append(row_util)
+    
+                fig_heat = go.Figure(data=go.Heatmap(
+                    z=heatmap_data,
+                    x=month_labels,
+                    y=shops,
+                    colorscale="RdYlGn",
+                    reversescale=True,
+                    zmin=0, zmax=110
+                ))
+                fig_heat.update_layout(title="Shop Utilization (%)", xaxis_title="Month")
+                st.plotly_chart(fig_heat, use_container_width=True, key="personnel_util_heatmap")
+            else:
+                st.info("No shop_details available yet for heatmap.")
+    
+        # --- 6) MONTE CARLO DETAIL ---
+        st.subheader("📊 Monte Carlo Distribution")
+        vis_month = st.selectbox(
+            "Select Month for Detail",
+            options=months_list,
+            format_func=lambda m: calendar.month_abbr[m],
+            key="personnel_mc_selector",
+        )
+    
+        sim_idx = month_to_sim_idx.get(vis_month, None)
+        if sim_idx is None:
+            st.warning("Selected month was not found in the simulation month list.")
+        else:
+            month_values = [trial[sim_idx].get("sorties_supported", 0) for trial in per_results]
+            fig2 = go.Figure(data=[go.Histogram(x=month_values, nbinsx=20)])
             fig2.update_layout(
-                title=f"Histogram: Sorties Supported (Month {months_list[0]})",
-                xaxis_title="Sorties Supported",
+                title=f"Sortie Confidence: {calendar.month_abbr[vis_month]}",
+                xaxis_title="Sorties",
                 yaxis_title="Frequency"
             )
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width=True, key=f"personnel_mc_hist_{vis_month}")
+    
+    else:
+        st.info("Run the Personnel Simulation to view results.")
 
-        # 7) Heatmap: % Manned by Shop × Month
-        shops  = list(workcenters.keys())
-        matrix = []
-        for shop in shops:
-            row = []
-            auth = sum(wc["auth"].get(lvl,0) for wc in wc_list if wc["shop"]==shop for lvl in ("3","5","7"))
-            for idx,m in enumerate(months_list):
-                pres = df_per.loc[m, "present_people"]
-                row.append((pres/auth*100) if auth>0 else 0)
-            matrix.append(row)
-        fig3 = go.Figure(data=go.Heatmap(
-            z=matrix,
-            x=[calendar.month_abbr[m] for m in months_list],
-            y=shops,
-            colorscale="RdYlGn",
-            zmin=0, zmax=100
-        ))
-        fig3.update_layout(title="% Manned by Shop × Month")
-        st.plotly_chart(fig3, use_container_width=True)
-
-        # 8) Downloadable Results Table (all columns)
-        st.subheader("📥 Download Results")
-        csv_buf = df_per[show_cols].reset_index().to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "📥 Download Personnel Sim Results CSV",
-            csv_buf,
-            file_name="personnel_sim_results.csv",
-            mime="text/csv"
-        )
 
 elif sim_choice == "Mission Generation & Risk Solver":
     import plotly.graph_objects as go

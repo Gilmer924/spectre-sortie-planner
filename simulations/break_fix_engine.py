@@ -1,9 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Feb  9 19:28:12 2026
+SPECTRE Break/Fix Engine
+Version: 2.0.0
 
-@author: scwri
+Changes in v2:
+- Generalized FY month parsing (supports int, str, FY keys, full names)
+- Unified long-fix routing via gate_L
+- Integrated long-return probability control (p_long_return)
+- Annual simulation compatibility alignment
 """
+
+
+ENGINE_VERSION = "2.0.0"
+ENGINE_CHANGESET = "Break/Fix v2: long-fix routing + generalized FY month parsing"
+
 
 import numpy as np
 import pandas as pd
